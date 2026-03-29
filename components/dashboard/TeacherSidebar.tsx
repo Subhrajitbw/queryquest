@@ -6,6 +6,7 @@ import { useState } from 'react';
 import {
   BarChart3,
   BookOpen,
+  ChevronLeft,
   Home,
   Loader2,
   LogOut,
@@ -60,20 +61,38 @@ export function TeacherSidebar() {
   };
 
   return (
-    <aside className="flex h-screen w-64 shrink-0 flex-col border-r border-white/10 bg-[#070b14] px-4 py-6">
-      <div className="mb-8 px-2">
-        <div className="text-xs font-black uppercase tracking-[0.3em] text-blue-400">
-          QueryQuest
+    <aside className="flex h-screen w-72 shrink-0 flex-col border-r border-white/10 bg-[#030712] px-5 py-6">
+      <div className="mb-8 rounded-3xl border border-white/10 bg-white/[0.03] p-4">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="flex h-11 w-11 items-center justify-center rounded-2xl border border-sky-500/20 bg-sky-500/10 text-sky-300">
+              <Home className="h-5 w-5" />
+            </div>
+            <div>
+              <div className="text-[11px] font-semibold uppercase tracking-[0.28em] text-sky-300">
+                QueryQuest
+              </div>
+              <h2 className="mt-1 text-lg font-semibold text-white">Admin</h2>
+            </div>
+          </div>
+          <button
+            type="button"
+            className="rounded-xl border border-white/10 bg-white/[0.03] p-2 text-slate-500"
+            aria-label="Sidebar controls"
+          >
+            <ChevronLeft className="h-4 w-4" />
+          </button>
         </div>
-        <h2 className="mt-3 text-2xl font-black tracking-tight text-white">
-          Teacher Panel
-        </h2>
-        <p className="mt-2 text-sm text-slate-400">
-          Manage classes, review learners, and monitor progress.
+        <p className="mt-4 text-sm text-slate-400">
+          QueryQuest Admin keeps classes, learners, and outcomes in one focused workspace.
         </p>
       </div>
 
-      <nav className="space-y-2">
+      <div className="px-2 text-[11px] font-semibold uppercase tracking-[0.28em] text-slate-500">
+        Workspace
+      </div>
+
+      <nav className="mt-3 space-y-2">
         {navItems.map((item) => {
           const Icon = item.icon;
           const isActive = item.isActive(pathname);
@@ -82,13 +101,21 @@ export function TeacherSidebar() {
             <Link
               key={item.label}
               href={item.href}
-              className={`flex items-center gap-3 rounded-2xl border px-4 py-3 text-sm font-semibold transition-all ${
+              className={`flex items-center gap-3 rounded-2xl border px-4 py-3 text-sm font-medium transition-all ${
                 isActive
-                  ? 'border-blue-500/40 bg-blue-500/15 text-white shadow-[0_0_0_1px_rgba(59,130,246,0.12)]'
-                  : 'border-transparent text-slate-400 hover:border-white/10 hover:bg-white/5 hover:text-white'
+                  ? 'border-sky-500/25 bg-sky-500/10 text-white shadow-[0_18px_40px_rgba(14,165,233,0.12)]'
+                  : 'border-transparent text-slate-400 hover:border-white/10 hover:bg-white/[0.04] hover:text-white'
               }`}
             >
-              <Icon className="h-4 w-4" />
+              <span
+                className={`flex h-9 w-9 items-center justify-center rounded-xl border ${
+                  isActive
+                    ? 'border-sky-500/20 bg-sky-500/10 text-sky-300'
+                    : 'border-white/10 bg-white/[0.03] text-slate-500'
+                }`}
+              >
+                <Icon className="h-4 w-4" />
+              </span>
               <span>{item.label}</span>
             </Link>
           );
@@ -96,18 +123,26 @@ export function TeacherSidebar() {
       </nav>
 
       <div className="mt-auto space-y-4">
-        <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
-          <div className="text-xs font-bold uppercase tracking-[0.2em] text-slate-500">
-            Access
+        <div className="rounded-3xl border border-white/10 bg-white/[0.03] p-4">
+          <div className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-500">
+            Profile
           </div>
-          <div className="mt-2 text-sm font-semibold text-white">Admin View</div>
+          <div className="mt-4 flex items-center gap-3">
+            <div className="flex h-11 w-11 items-center justify-center rounded-2xl border border-white/10 bg-white/[0.04] text-sm font-semibold text-white">
+              QA
+            </div>
+            <div>
+              <div className="font-medium text-white">QueryQuest Admin</div>
+              <div className="text-sm text-slate-400">Teacher workspace</div>
+            </div>
+          </div>
         </div>
 
         <button
           type="button"
           onClick={handleLogout}
           disabled={loggingOut}
-          className="flex w-full items-center justify-center gap-2 rounded-2xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm font-semibold text-red-300 transition-all hover:bg-red-500/15 disabled:cursor-not-allowed disabled:opacity-70"
+          className="flex w-full items-center justify-center gap-2 rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm font-medium text-slate-200 transition-all hover:border-red-500/20 hover:bg-red-500/10 hover:text-red-200 disabled:cursor-not-allowed disabled:opacity-70"
         >
           {loggingOut ? (
             <Loader2 className="h-4 w-4 animate-spin" />

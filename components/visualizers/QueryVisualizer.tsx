@@ -1,230 +1,266 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
-import { 
-  Database, Search, Filter, Layers, ArrowRight, 
-  Cpu, HardDrive, AlertCircle, CheckCircle2, ChevronRight,
-  TerminalSquare, ArrowDown, Link2, ListFilter, Table as TableIcon,
-  RotateCcw, SkipBack, Play, Pause, SkipForward
+import { useEffect, useMemo, useState } from 'react';
+import { AnimatePresence, motion } from 'motion/react';
+import {
+  AlertCircle,
+  ArrowRight,
+  ChevronRight,
+  Database,
+  HardDrive,
+  Search,
+  ShieldAlert,
+  ShieldCheck,
+  Sparkles,
+  TableProperties,
+  Workflow,
 } from 'lucide-react';
 import { useAppStore } from '@/lib/store';
-import { buildExecutionSteps, ExecutionStep, Phase, Operation, parseQuery } from '@/lib/executionEngine';
-import { initDB } from '@/lib/db';
+import { buildExecutionSteps, type ExecutionStep, type Phase } from '@/lib/executionEngine';
+import { getSchema } from '@/lib/db';
+import { analyzeQuery } from '@/lib/queryAnalyzer';
+import { getExecutionTabs, getPrimaryTab, type ExecutionTab } from '@/lib/visualizerConfig';
 import DataTable from '@/components/DataTable';
 import { useStepPlayer } from '@/hooks/useStepPlayer';
+import StepControls from '@/components/StepControls';
+import FlowVisualizer from '@/components/visualizers/FlowVisualizer';
+import ScanVisualizer from '@/components/visualizers/ScanVisualizer';
+import FilterVisualizer from '@/components/visualizers/FilterVisualizer';
+import JoinVisualizer from '@/components/visualizers/JoinVisualizer';
+import AggregateVisualizer from '@/components/visualizers/AggregateVisualizer';
+import SortVisualizer from '@/components/visualizers/SortVisualizer';
+import ProjectionVisualizer from '@/components/visualizers/ProjectionVisualizer';
+import BTreeVisualizer from '@/components/visualizers/BTreeVisualizer';
+import TransactionVisualizer from '@/components/visualizers/TransactionVisualizer';
+import AcidVisualizer from '@/components/visualizers/AcidVisualizer';
+import SubqueryVisualizer from '@/components/visualizers/SubqueryVisualizer';
+import { getStepColumns, getStepRows } from '@/components/visualizers/shared';
+
+type SchemaTable = {
+  table: string;
+  columns: { name: string; type: string }[];
+};
+
+type InsightTab = 'er' | 'security' | 'storage';
 
 const PHASE_ICONS: Record<Phase, React.ReactNode> = {
-  PARSE: <Search className="w-5 h-5 text-blue-400" />,
-  VALIDATE: <Search className="w-5 h-5 text-purple-400" />,
-  PLAN: <Search className="w-5 h-5 text-indigo-400" />,
-  ACCESS: <Database className="w-5 h-5 text-indigo-400" />,
-  EXECUTE: <Cpu className="w-5 h-5 text-orange-400" />,
-  RESULT: <CheckCircle2 className="w-5 h-5 text-green-500" />,
-  ERROR: <AlertCircle className="w-5 h-5 text-red-500" />
+  PARSE: <Search className="h-4 w-4 text-sky-300" />,
+  VALIDATE: <Sparkles className="h-4 w-4 text-violet-300" />,
+  PLAN: <Workflow className="h-4 w-4 text-indigo-300" />,
+  ACCESS: <Database className="h-4 w-4 text-cyan-300" />,
+  EXECUTE: <Workflow className="h-4 w-4 text-amber-300" />,
+  RESULT: <TableProperties className="h-4 w-4 text-emerald-300" />,
+  ERROR: <AlertCircle className="h-4 w-4 text-red-300" />,
 };
 
-const OPERATION_ICONS: Record<string, React.ReactNode> = {
-  TOKENIZE: <Search className="w-4 h-4" />,
-  SYNTAX_CHECK: <Search className="w-4 h-4" />,
-  SEMANTIC_CHECK: <Search className="w-4 h-4" />,
-  PLAN_BUILD: <Layers className="w-4 h-4" />,
-  TABLE_SCAN: <Database className="w-4 h-4" />,
-  INDEX_SCAN: <Database className="w-4 h-4" />,
-  FILTER: <Filter className="w-4 h-4" />,
-  JOIN: <Layers className="w-4 h-4" />,
-  GROUP: <Layers className="w-4 h-4" />,
-  AGGREGATE: <Layers className="w-4 h-4" />,
-  SORT: <ArrowRight className="w-4 h-4 rotate-90" />,
-  LIMIT: <SkipForward className="w-4 h-4" />,
-  PROJECT: <Search className="w-4 h-4" />,
-  RETURN: <CheckCircle2 className="w-4 h-4" />
-};
+function getRowsChanged(previousStep?: ExecutionStep, currentStep?: ExecutionStep) {
+  const previousCount = getStepRows(previousStep).length;
+  const currentCount = getStepRows(currentStep).length;
 
-const SubqueryVisualizer = ({ step }: { step: ExecutionStep }) => {
-  const { visual } = step;
-  if (!visual) return null;
+  if (!previousStep) {
+    return 'This is the first frame in the execution story.';
+  }
 
-  if (visual.type === 'subquery-start') {
-    return (
-      <div className="flex flex-col items-center justify-center py-20 bg-blue-500/5 rounded-3xl border border-blue-500/20 border-dashed">
-        <div className="p-4 rounded-full bg-blue-500/10 mb-4 animate-pulse">
-          <Layers className="w-12 h-12 text-blue-400" />
+  if (currentCount === previousCount) {
+    return `Row count stayed at ${currentCount}. The transformation changed interpretation more than size.`;
+  }
+
+  if (currentCount > previousCount) {
+    return `Row count grew from ${previousCount} to ${currentCount}. This step expanded the working set.`;
+  }
+
+  return `Row count dropped from ${previousCount} to ${currentCount}. This step narrowed the working set.`;
+}
+
+function StepQueryBlock({ query }: { query: string }) {
+  return (
+    <div className="rounded-2xl border border-white/10 bg-[#060b16] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
+      <div className="flex items-center justify-between gap-4">
+        <div className="text-[11px] font-semibold uppercase tracking-[0.28em] text-zinc-500">
+          Step Query
         </div>
-        <h3 className="text-xl font-bold text-white mb-2">Entering Subquery</h3>
-        <p className="text-zinc-400 text-sm max-w-md text-center">
-          The database engine is now executing a nested query to retrieve values needed for the main query&apos;s filter.
-        </p>
+        <div className="text-xs text-zinc-500">Readonly for continuity</div>
+      </div>
+      <pre className="mt-3 overflow-x-auto whitespace-pre-wrap break-words font-mono text-sm leading-6 text-zinc-200">
+        {query}
+      </pre>
+    </div>
+  );
+}
+
+function StepExplanation({ step }: { step?: ExecutionStep }) {
+  if (!step?.explanation) return null;
+
+  if (typeof step.explanation === 'string') {
+    return (
+      <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+        <div className="text-[11px] font-semibold uppercase tracking-[0.28em] text-zinc-500">
+          Why This Step Exists
+        </div>
+        <p className="mt-3 text-sm leading-6 text-zinc-300">{step.explanation}</p>
       </div>
     );
   }
-
-  if (visual.type === 'subquery-result') {
-    const isEmpty = !(visual as any).result || (visual as any).result.length === 0;
-    return (
-      <div className="space-y-4">
-        <div className="flex items-center gap-3 text-green-400">
-          <CheckCircle2 className="w-5 h-5" />
-          <h3 className="text-lg font-bold">Subquery Execution Complete</h3>
-        </div>
-        <p className="text-zinc-400 text-sm">
-          {isEmpty 
-            ? "The nested query executed but returned no results. This will cause the main query's filter to match nothing."
-            : "The nested query has finished executing. The results shown below will be used to filter the main query."}
-        </p>
-        {isEmpty && (
-          <div className="p-4 bg-red-500/10 border border-red-500/20 rounded-xl flex items-center gap-3 text-red-400 text-sm">
-            <AlertCircle className="w-4 h-4" />
-            <span>Empty subquery result detected.</span>
-          </div>
-        )}
-      </div>
-    );
-  }
-
-  if (visual.type === 'subquery') {
-    const { parentTable, subTable, connectionColumn, resultValues } = visual as any;
-    return (
-      <div className="flex flex-col gap-8 py-12 bg-zinc-900/30 rounded-3xl border border-white/5">
-        <div className="flex items-center justify-around px-12 relative">
-          <div className="flex flex-col items-center gap-4">
-            <div className="w-32 h-32 rounded-2xl border-2 border-blue-500/30 bg-blue-500/5 flex items-center justify-center">
-              <Database className="w-12 h-12 text-blue-400" />
-            </div>
-            <div className="text-center">
-              <div className="text-[10px] font-bold text-blue-400 uppercase tracking-widest">Main Table</div>
-              <div className="text-lg font-bold text-white">{parentTable}</div>
-            </div>
-          </div>
-
-          <div className="flex flex-col items-center gap-2 flex-1 max-w-[200px]">
-            <div className="text-[10px] font-mono text-yellow-400 bg-yellow-500/10 px-3 py-1 rounded-full border border-yellow-500/20">
-              WHERE {connectionColumn} IN (...)
-            </div>
-            <div className="h-px w-full bg-gradient-to-r from-blue-500/50 to-green-500/50 relative">
-              <motion.div 
-                animate={{ x: [0, 200], opacity: [0, 1, 0] }}
-                transition={{ duration: 2, repeat: Infinity }}
-                className="absolute top-1/2 -translate-y-1/2 w-2 h-2 bg-yellow-400 rounded-full blur-sm"
-              />
-            </div>
-            <Link2 className="w-5 h-5 text-zinc-500" />
-          </div>
-
-          <div className="flex flex-col items-center gap-4">
-            <div className="w-32 h-32 rounded-2xl border-2 border-green-500/30 bg-green-500/5 flex items-center justify-center">
-              <ListFilter className="w-12 h-12 text-green-400" />
-            </div>
-            <div className="text-center">
-              <div className="text-[10px] font-bold text-green-400 uppercase tracking-widest">Subquery Result</div>
-              <div className="text-lg font-bold text-white">{subTable} Values</div>
-            </div>
-          </div>
-        </div>
-
-        <div className="px-12 flex flex-wrap justify-center gap-2">
-          {resultValues?.map((val: any, i: number) => (
-            <motion.div
-              key={i}
-              initial={{ scale: 0 }}
-              animate={{ scale: 1 }}
-              transition={{ delay: i * 0.05 }}
-              className="px-3 py-1 bg-green-500/10 border border-green-500/20 rounded-full text-[10px] font-mono text-green-400"
-            >
-              {val}
-            </motion.div>
-          ))}
-        </div>
-      </div>
-    );
-  }
-
-  return null;
-};
-
-const JoinVisualizer = ({ step }: { step: ExecutionStep }) => {
-  const { visual } = step;
-  if (!visual || visual.type !== 'join') return null;
 
   return (
-    <div className="flex flex-col items-center gap-12 py-12 bg-zinc-900/30 rounded-3xl border border-white/5">
-      <div className="flex items-center justify-center gap-12 relative h-48">
-        <motion.div 
-          initial={{ x: -20, opacity: 0 }}
-          animate={{ x: 0, opacity: 1 }}
-          className="w-48 h-48 rounded-full border-4 border-blue-500/50 bg-blue-500/10 flex items-center justify-center relative z-10"
-        >
-          <div className="text-center">
-            <div className="text-[10px] font-bold text-blue-400 uppercase tracking-widest mb-1">Left Table</div>
-            <div className="text-lg font-bold text-white">{visual.leftTable}</div>
-          </div>
-        </motion.div>
+    <div className="grid gap-4 md:grid-cols-2">
+      <div className="rounded-2xl border border-sky-500/20 bg-sky-500/5 p-4">
+        <div className="text-[11px] font-semibold uppercase tracking-[0.28em] text-sky-300">What</div>
+        <p className="mt-3 text-sm leading-6 text-white">{step.explanation.what}</p>
+      </div>
+      <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/5 p-4">
+        <div className="text-[11px] font-semibold uppercase tracking-[0.28em] text-emerald-300">Why</div>
+        <p className="mt-3 text-sm leading-6 text-white">{step.explanation.why}</p>
+      </div>
+    </div>
+  );
+}
 
-        <motion.div 
-          initial={{ x: 20, opacity: 0 }}
-          animate={{ x: 0, opacity: 1 }}
-          className="w-48 h-48 rounded-full border-4 border-purple-500/50 bg-purple-500/10 flex items-center justify-center -ml-16 relative z-0"
-        >
-          <div className="text-center pl-8">
-            <div className="text-[10px] font-bold text-purple-400 uppercase tracking-widest mb-1">Right Table</div>
-            <div className="text-lg font-bold text-white">{visual.rightTable}</div>
-          </div>
-        </motion.div>
+function ERInsightPanel({ schema }: { schema: SchemaTable[] }) {
+  const relationships = schema.flatMap((table) =>
+    table.columns
+      .filter((column) => column.name.endsWith('_id'))
+      .map((column) => {
+        const base = column.name.replace(/_id$/, '');
+        const related = schema.find((item) => item.table === `${base}s` || item.table === base);
+        return related ? { from: table.table, to: related.table, label: column.name } : null;
+      })
+      .filter(Boolean) as { from: string; to: string; label: string }[]
+  );
 
-        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-           <div className="w-16 h-32 bg-yellow-500/20 blur-xl rounded-full flex items-center justify-center">
-             {visual.matches !== undefined && visual.matches > 0 && (
-               <div className="text-[10px] font-bold text-yellow-500 bg-zinc-950/80 px-2 py-1 rounded-full border border-yellow-500/20 whitespace-nowrap">
-                 {visual.matches} Matches Found
-               </div>
-             )}
-           </div>
-        </div>
+  return (
+    <div className="grid gap-4 xl:grid-cols-[1.05fr_0.95fr]">
+      <div className="grid gap-4 md:grid-cols-2">
+        {schema.map((table) => (
+          <div key={table.table} className="rounded-2xl border border-white/10 bg-[#060b16] p-4">
+            <div className="text-sm font-semibold text-white">{table.table}</div>
+            <div className="mt-3 space-y-2">
+              {table.columns.map((column) => (
+                <div key={column.name} className="flex items-center justify-between gap-4 text-xs">
+                  <span className="text-zinc-300">{column.name}</span>
+                  <span className="font-mono text-zinc-500">{column.type}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
       </div>
 
-      <div className="w-full px-12 grid grid-cols-3 gap-8 items-center">
-        <div className="space-y-2">
-          {visual.leftRows?.map((row: any, i: number) => (
-            <motion.div 
-              key={i}
-              initial={{ x: -20, opacity: 0 }}
-              animate={{ x: 0, opacity: 1 }}
-              transition={{ delay: i * 0.1 }}
-              className="p-2 bg-blue-500/5 border border-blue-500/20 rounded text-[10px] font-mono text-blue-300 truncate"
-            >
-              {JSON.stringify(row)}
-            </motion.div>
-          ))}
-        </div>
-
-        <div className="flex flex-col items-center gap-2">
-          <div className="h-px w-full bg-gradient-to-r from-blue-500/50 via-yellow-500/50 to-purple-500/50" />
-          <div className="px-3 py-1 bg-zinc-800 rounded-full border border-white/10 text-[10px] font-mono text-yellow-400">
-            {visual.matchingKeys?.join(' = ')}
-          </div>
-          <div className="h-px w-full bg-gradient-to-r from-blue-500/50 via-yellow-500/50 to-purple-500/50" />
-          <div className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest mt-2">
-            {visual.joinType} JOIN
-          </div>
-        </div>
-
-        <div className="space-y-2">
-          {visual.rightRows?.map((row: any, i: number) => (
-            <motion.div 
-              key={i}
-              initial={{ x: 20, opacity: 0 }}
-              animate={{ x: 0, opacity: 1 }}
-              transition={{ delay: i * 0.1 }}
-              className="p-2 bg-purple-500/5 border border-purple-500/20 rounded text-[10px] font-mono text-purple-300 truncate text-right"
-            >
-              {JSON.stringify(row)}
-            </motion.div>
+      <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+        <div className="text-sm font-semibold text-white">Relationships</div>
+        <div className="mt-4 space-y-3">
+          {relationships.map((relationship) => (
+            <div key={`${relationship.from}-${relationship.to}-${relationship.label}`} className="rounded-2xl border border-white/10 bg-[#060b16] p-3">
+              <div className="flex items-center gap-2 text-sm text-zinc-200">
+                <span>{relationship.from}</span>
+                <ChevronRight className="h-4 w-4 text-zinc-600" />
+                <span>{relationship.to}</span>
+              </div>
+              <div className="mt-2 text-xs text-zinc-500">via {relationship.label}</div>
+            </div>
           ))}
         </div>
       </div>
     </div>
   );
-};
+}
+
+function SecurityInsightPanel() {
+  return (
+    <div className="grid gap-4 xl:grid-cols-2">
+      <div className="rounded-2xl border border-red-500/20 bg-red-500/5 p-4">
+        <div className="flex items-center gap-2 text-red-300">
+          <ShieldAlert className="h-4 w-4" />
+          <span className="font-semibold">Unsafe Query Pattern</span>
+        </div>
+        <pre className="mt-4 overflow-x-auto whitespace-pre-wrap break-words font-mono text-sm text-red-100">
+          {"SELECT * FROM users WHERE email = '<input>' OR '1'='1';"}
+        </pre>
+        <p className="mt-4 text-sm leading-6 text-red-100">
+          WHAT: user input changes the SQL logic.
+          <br />
+          WHY: the condition can become always true and bypass intended filtering.
+        </p>
+      </div>
+
+      <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/5 p-4">
+        <div className="flex items-center gap-2 text-emerald-300">
+          <ShieldCheck className="h-4 w-4" />
+          <span className="font-semibold">Safe Query Pattern</span>
+        </div>
+        <pre className="mt-4 overflow-x-auto whitespace-pre-wrap break-words font-mono text-sm text-emerald-100">
+          SELECT * FROM users WHERE email = ?;
+        </pre>
+        <p className="mt-4 text-sm leading-6 text-emerald-100">
+          WHAT: SQL structure stays fixed and values are bound separately.
+          <br />
+          WHY: the database treats input as data, not executable SQL.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function StorageInsightPanel() {
+  const storageFrames = [
+    { title: 'Disk Pages', description: 'Rows live on disk in pages before the engine touches them.' },
+    { title: 'Buffer Pool', description: 'Frequently accessed pages are pulled into memory to avoid repeated disk reads.' },
+    { title: 'Execution', description: 'The planner reads from memory when possible, then applies filters, joins, and sorts.' },
+  ];
+
+  return (
+    <div className="grid gap-4 xl:grid-cols-3">
+      {storageFrames.map((frame, index) => (
+        <div key={frame.title} className="relative rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+          {index < storageFrames.length - 1 && (
+            <ArrowRight className="absolute -right-2 top-1/2 hidden h-4 w-4 -translate-y-1/2 text-zinc-700 xl:block" />
+          )}
+          <div className="flex items-center gap-2 text-white">
+            <HardDrive className="h-4 w-4 text-cyan-300" />
+            <span className="font-semibold">{frame.title}</span>
+          </div>
+          <p className="mt-3 text-sm leading-6 text-zinc-400">{frame.description}</p>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function renderExecutionVisualizer(
+  tab: ExecutionTab,
+  step: ExecutionStep,
+  previousStep: ExecutionStep | undefined,
+  analysis: ReturnType<typeof analyzeQuery>
+) {
+  const props = { step, previousStep, analysis };
+
+  switch (tab) {
+    case 'flow':
+      return <FlowVisualizer {...props} />;
+    case 'scan':
+      return <ScanVisualizer {...props} />;
+    case 'filter':
+      return <FilterVisualizer {...props} />;
+    case 'join':
+      return <JoinVisualizer {...props} />;
+    case 'aggregate':
+      return <AggregateVisualizer {...props} />;
+    case 'sort':
+      return <SortVisualizer {...props} />;
+    case 'projection':
+      return <ProjectionVisualizer {...props} />;
+    case 'index':
+      return <BTreeVisualizer {...props} />;
+    case 'subquery':
+      return <SubqueryVisualizer {...props} />;
+    case 'transaction':
+      return <TransactionVisualizer {...props} />;
+    case 'acid':
+      return <AcidVisualizer {...props} />;
+    default:
+      return <FlowVisualizer {...props} />;
+  }
+}
 
 export default function QueryVisualizer() {
   const { lastExecutedQuery } = useAppStore();
@@ -232,25 +268,21 @@ export default function QueryVisualizer() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [speed, setSpeed] = useState(1);
+  const [schema, setSchema] = useState<SchemaTable[]>([]);
+  const [executionTab, setExecutionTab] = useState<ExecutionTab>('flow');
+  const [insightTab, setInsightTab] = useState<InsightTab>('er');
 
   useEffect(() => {
     async function generateSteps() {
       if (!lastExecutedQuery) return;
-      
+
       setIsLoading(true);
       setError(null);
       try {
-        const db = await initDB();
-        const ast = parseQuery(lastExecutedQuery);
-        if (ast) {
-          const generatedSteps = await buildExecutionSteps(ast, db);
-          setSteps(generatedSteps);
-        } else {
-          setError("Failed to parse query. Check your SQL syntax.");
-        }
+        setSteps(await buildExecutionSteps(lastExecutedQuery));
       } catch (err) {
         console.error(err);
-        setError("Failed to analyze query execution.");
+        setError('Failed to analyze query execution.');
       } finally {
         setIsLoading(false);
       }
@@ -259,18 +291,54 @@ export default function QueryVisualizer() {
     generateSteps();
   }, [lastExecutedQuery]);
 
+  useEffect(() => {
+    async function loadSchema() {
+      setSchema(await getSchema());
+    }
+
+    loadSchema();
+  }, []);
+
   const player = useStepPlayer(steps, 1500 / speed);
   const { currentStep, totalSteps, isPlaying, play, pause, next, prev, reset, goToStep, currentStepData } = player;
+  const previousStep = currentStep > 0 ? steps[currentStep - 1] : undefined;
+
+  const analysis = useMemo(
+    () => analyzeQuery(currentStepData?.query ?? ''),
+    [currentStepData?.query]
+  );
+
+  const concepts = useMemo(() => {
+    if (!currentStepData) return [];
+
+    const nextConcepts = [currentStepData.operation, currentStepData.phase].filter(Boolean) as string[];
+    if (analysis.hasJoin) nextConcepts.push('JOIN');
+    if (analysis.hasWhere) nextConcepts.push('FILTER');
+    if (analysis.hasAggregation || analysis.hasGroupBy) nextConcepts.push('GROUP');
+    if (analysis.hasOrderBy) nextConcepts.push('SORT');
+    if (currentStepData.executionContext?.accessType === 'INDEX_SCAN') nextConcepts.push('INDEX');
+    if (currentStepData.executionContext?.isTransaction || analysis.isWriteOperation) nextConcepts.push('TXN');
+    if (currentStepData.executionContext?.isTransaction || analysis.isWriteOperation) nextConcepts.push('ACID');
+
+    return Array.from(new Set(nextConcepts));
+  }, [analysis, currentStepData]);
+
+  const executionTabs = useMemo(() => getExecutionTabs(currentStepData), [currentStepData]);
+
+  useEffect(() => {
+    if (!currentStepData) return;
+    setExecutionTab(getPrimaryTab(currentStepData));
+  }, [currentStepData]);
 
   if (!lastExecutedQuery) {
     return (
       <div className="flex flex-col items-center justify-center py-20 text-center">
-        <div className="p-4 rounded-full bg-white/5 mb-4">
-          <Database className="h-12 w-12 text-gray-500" />
+        <div className="rounded-full bg-white/5 p-4">
+          <Database className="h-12 w-12 text-zinc-500" />
         </div>
-        <h3 className="text-xl font-bold text-white mb-2">No Query Executed</h3>
-        <p className="text-gray-400 max-w-md">
-          Go to the SQL Playground, run a query, and then come back here to see how it was executed step-by-step.
+        <h3 className="mt-4 text-xl font-bold text-white">No Query Executed</h3>
+        <p className="mt-2 max-w-md text-sm leading-6 text-zinc-400">
+          Run a query in the playground first, then return here to inspect it frame by frame.
         </p>
       </div>
     );
@@ -279,8 +347,8 @@ export default function QueryVisualizer() {
   if (isLoading) {
     return (
       <div className="flex flex-col items-center justify-center py-20">
-        <div className="h-12 w-12 border-4 border-blue-500/20 border-t-blue-500 rounded-full animate-spin mb-4" />
-        <p className="text-gray-400">Analyzing execution plan...</p>
+        <div className="mb-4 h-12 w-12 animate-spin rounded-full border-4 border-sky-500/20 border-t-sky-500" />
+        <p className="text-zinc-400">Preparing execution frames...</p>
       </div>
     );
   }
@@ -288,139 +356,232 @@ export default function QueryVisualizer() {
   if (error) {
     return (
       <div className="flex flex-col items-center justify-center py-20 text-center">
-        <div className="p-4 rounded-full bg-red-500/10 mb-4">
-          <AlertCircle className="h-12 w-12 text-red-500" />
+        <div className="rounded-full bg-red-500/10 p-4">
+          <AlertCircle className="h-12 w-12 text-red-400" />
         </div>
-        <h3 className="text-xl font-bold text-white mb-2">Analysis Failed</h3>
-        <p className="text-gray-400 max-w-md">{error}</p>
+        <h3 className="mt-4 text-xl font-bold text-white">Analysis Failed</h3>
+        <p className="mt-2 max-w-md text-sm leading-6 text-zinc-400">{error}</p>
       </div>
     );
   }
 
-  if (steps.length === 0) return null;
+  if (!currentStepData) return null;
 
   return (
-    <div className="flex flex-col w-full max-w-6xl mx-auto h-[calc(100vh-8rem)]">
-      {/* TRANSACTION TIMELINE */}
-      <div className="h-12 border-b border-white/10 flex items-center justify-center gap-4 bg-zinc-900/50 rounded-t-2xl">
-        {['BEGIN', 'READ', 'WRITE', 'COMMIT'].map((stage, i) => (
-          <div key={stage} className={`flex items-center gap-2 ${currentStepData?.visual?.stage === stage ? 'text-white font-bold' : 'text-zinc-600'}`}>
-            {i > 0 && <ArrowRight className="w-4 h-4" />}
-            <span className="text-xs uppercase tracking-widest">{stage}</span>
-          </div>
-        ))}
-      </div>
-
-      <div className="flex-1 flex overflow-hidden border border-white/10 rounded-b-2xl">
-        {/* LEFT PANEL: Step Details */}
-        <div className="w-80 border-r border-white/10 bg-zinc-900/50 overflow-y-auto p-6 flex flex-col gap-6">
-          <div className="space-y-2">
-            <div className="flex items-center gap-2 text-zinc-400 text-[10px] font-bold uppercase tracking-widest">
-              {PHASE_ICONS[currentStepData?.phase || 'RESULT']}
-              {currentStepData?.phase}
-              {currentStepData?.operation && (
-                <>
-                  <ChevronRight className="w-3 h-3" />
-                  <span className="text-blue-400">{currentStepData.operation}</span>
-                </>
-              )}
-            </div>
-            <h2 className="text-2xl font-bold text-white leading-tight">
-              {currentStepData?.title}
-            </h2>
-            <p className="text-zinc-400 text-sm leading-relaxed">
-              {currentStepData?.description}
+    <div className="mx-auto flex w-full max-w-7xl flex-col gap-6">
+      <section className="rounded-[28px] border border-white/10 bg-[radial-gradient(circle_at_top_left,rgba(56,189,248,0.14),transparent_36%),linear-gradient(135deg,#0f172a,#020617)] p-6 shadow-[0_28px_80px_rgba(2,6,23,0.62)]">
+        <div className="flex flex-col gap-6 xl:flex-row xl:items-end xl:justify-between">
+          <div>
+            <div className="text-[11px] font-semibold uppercase tracking-[0.32em] text-sky-300">Step-Based Query Engine</div>
+            <h1 className="mt-4 text-3xl font-semibold tracking-tight text-white md:text-4xl">
+              See one SQL transformation at a time.
+            </h1>
+            <p className="mt-3 max-w-3xl text-sm leading-7 text-zinc-300 md:text-base">
+              Each frame shows what changed, what the data looks like now, and why that transformation happened.
             </p>
-            {currentStepData?.explanation && (
-              <div className="mt-4 p-3 bg-white/5 rounded-lg border border-white/10">
-                <p className="text-zinc-500 text-xs leading-relaxed italic">
-                  {currentStepData.explanation}
+          </div>
+
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+              <div className="text-[11px] uppercase tracking-[0.24em] text-zinc-500">Step</div>
+              <div className="mt-2 text-2xl font-semibold text-white">{currentStep + 1}/{totalSteps}</div>
+            </div>
+            <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+              <div className="text-[11px] uppercase tracking-[0.24em] text-zinc-500">Rows</div>
+              <div className="mt-2 text-2xl font-semibold text-white">{getStepRows(currentStepData).length}</div>
+            </div>
+            <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+              <div className="text-[11px] uppercase tracking-[0.24em] text-zinc-500">Phase</div>
+              <div className="mt-2 text-2xl font-semibold text-white">{currentStepData.phase}</div>
+            </div>
+            <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+              <div className="text-[11px] uppercase tracking-[0.24em] text-zinc-500">Playback</div>
+              <div className="mt-2 text-sm font-semibold text-white">{isPlaying ? 'Autoplaying' : 'Manual'}</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section className="grid gap-6 xl:grid-cols-[0.92fr_1.08fr]">
+        <div className="space-y-6">
+          <div className="rounded-[28px] border border-white/10 bg-[#07101c] p-6 shadow-[0_24px_70px_rgba(2,6,23,0.5)]">
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div>
+                <div className="flex items-center gap-2 text-sm font-medium text-zinc-300">
+                  {PHASE_ICONS[currentStepData.phase]}
+                  <span>Step {currentStep + 1}</span>
+                  <ChevronRight className="h-4 w-4 text-zinc-600" />
+                  <span className="text-white">{currentStepData.title}</span>
+                </div>
+                <p className="mt-3 text-sm leading-6 text-zinc-400">{currentStepData.description}</p>
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+                {concepts.map((concept) => (
+                  <span
+                    key={concept}
+                    className="rounded-full border border-sky-500/20 bg-sky-500/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.22em] text-sky-200"
+                  >
+                    {concept}
+                  </span>
+                ))}
+              </div>
+            </div>
+
+            <div className="mt-5 rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+              <div className="text-[11px] font-semibold uppercase tracking-[0.28em] text-zinc-500">What Changed</div>
+              <p className="mt-3 text-sm leading-6 text-zinc-300">{getRowsChanged(previousStep, currentStepData)}</p>
+            </div>
+
+            <div className="mt-5">
+              <StepQueryBlock query={currentStepData.query} />
+            </div>
+
+            <div className="mt-5">
+              <StepExplanation step={currentStepData} />
+            </div>
+          </div>
+
+          <div className="rounded-[28px] border border-white/10 bg-[#07101c] p-6 shadow-[0_24px_70px_rgba(2,6,23,0.5)]">
+            <div className="text-[11px] font-semibold uppercase tracking-[0.28em] text-zinc-500">Result Table</div>
+            <p className="mt-2 text-sm leading-6 text-zinc-400">This is the row set produced by the current frame.</p>
+            <div className="mt-4 overflow-hidden rounded-2xl border border-white/10">
+              <DataTable
+                columns={getStepColumns(currentStepData).map((column) => ({ header: column, accessorKey: column }))}
+                data={getStepRows(currentStepData)}
+                activeRowIndices={currentStepData.highlight?.rows}
+              />
+            </div>
+          </div>
+        </div>
+
+        <div className="space-y-6">
+          <div className="rounded-[28px] border border-white/10 bg-[#050913] p-6 shadow-[0_24px_70px_rgba(2,6,23,0.5)]">
+            <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+              <div>
+                <div className="text-[11px] font-semibold uppercase tracking-[0.28em] text-zinc-500">Query Execution</div>
+                <h2 className="mt-2 text-xl font-semibold text-white">Visuals for this step only</h2>
+                <p className="mt-2 text-sm leading-6 text-zinc-400">
+                  Tabs below are derived only from the current step operation.
                 </p>
               </div>
-            )}
+
+              <div className="flex flex-wrap gap-2">
+                {executionTabs.map((tab) => (
+                  <button
+                    key={tab}
+                    onClick={() => setExecutionTab(tab)}
+                    className={`rounded-2xl border px-4 py-2 text-sm transition-colors ${
+                      executionTab === tab
+                        ? 'border-sky-500/30 bg-sky-500/10 text-white'
+                        : 'border-white/10 bg-white/[0.03] text-zinc-400 hover:bg-white/[0.06] hover:text-white'
+                    }`}
+                  >
+                    {tab}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="mt-6">
+              <AnimatePresence mode="wait">
+                <motion.div
+                  key={`${currentStep}-${executionTab}`}
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -8 }}
+                  transition={{ duration: 0.18 }}
+                  className="space-y-4"
+                >
+                  {renderExecutionVisualizer(executionTab, currentStepData, previousStep, analysis)}
+                </motion.div>
+              </AnimatePresence>
+            </div>
           </div>
 
-          {/* ACID Explanation Panel */}
-          <div className="mt-auto pt-6 border-t border-white/5">
-            <h3 className="text-xs font-bold text-zinc-500 uppercase tracking-wider mb-3">ACID Properties</h3>
-            <div className="grid grid-cols-2 gap-2 text-[10px] text-zinc-400">
-              <div className="p-2 bg-zinc-800/50 rounded border border-white/5"><strong>A</strong>tomicity</div>
-              <div className="p-2 bg-zinc-800/50 rounded border border-white/5"><strong>C</strong>onsistency</div>
-              <div className="p-2 bg-zinc-800/50 rounded border border-white/5"><strong>I</strong>solation</div>
-              <div className="p-2 bg-zinc-800/50 rounded border border-white/5"><strong>D</strong>urability</div>
+          <div className="rounded-[28px] border border-white/10 bg-[#050913] p-6 shadow-[0_24px_70px_rgba(2,6,23,0.5)]">
+            <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+              <div>
+                <div className="text-[11px] font-semibold uppercase tracking-[0.28em] text-zinc-500">Database Insights</div>
+                <h2 className="mt-2 text-xl font-semibold text-white">Stable context around the query</h2>
+                <p className="mt-2 text-sm leading-6 text-zinc-400">
+                  These insights do not change per step. They help learners connect execution frames back to the database itself.
+                </p>
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+                {[
+                  { id: 'er', label: 'ER Diagram' },
+                  { id: 'security', label: 'Security' },
+                  { id: 'storage', label: 'Storage' },
+                ].map((tab) => (
+                  <button
+                    key={tab.id}
+                    onClick={() => setInsightTab(tab.id as InsightTab)}
+                    className={`rounded-2xl border px-4 py-2 text-sm transition-colors ${
+                      insightTab === tab.id
+                        ? 'border-emerald-500/30 bg-emerald-500/10 text-white'
+                        : 'border-white/10 bg-white/[0.03] text-zinc-400 hover:bg-white/[0.06] hover:text-white'
+                    }`}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="mt-6">
+              <AnimatePresence mode="wait">
+                <motion.div
+                  key={insightTab}
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -8 }}
+                  transition={{ duration: 0.18 }}
+                >
+                  {insightTab === 'er' && <ERInsightPanel schema={schema} />}
+                  {insightTab === 'security' && <SecurityInsightPanel />}
+                  {insightTab === 'storage' && <StorageInsightPanel />}
+                </motion.div>
+              </AnimatePresence>
             </div>
           </div>
         </div>
+      </section>
 
-        {/* RIGHT PANEL: Visualization Canvas */}
-        <div className="flex-1 bg-zinc-950 p-8 overflow-y-auto relative">
-          <AnimatePresence mode="wait">
-            <motion.div
-              key={currentStep}
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -20 }}
-              className="space-y-8"
-            >
-              {/* Data Visualization */}
-              <div className="grid grid-cols-1 gap-8">
-                {currentStepData?.visual?.type === 'join' && (
-                  <JoinVisualizer step={currentStepData} />
-                )}
-                {currentStepData?.visual?.type?.startsWith('subquery') && (
-                  <SubqueryVisualizer step={currentStepData} />
-                )}
-                
-                {/* DataTable */}
-                <div className="bg-zinc-900 rounded-xl border border-white/10 overflow-hidden shadow-2xl">
-                  <DataTable 
-                    columns={(currentStepData.metadata as any)?.columns?.map((c: string) => ({ header: c, accessorKey: c })) || 
-                             Object.keys(currentStepData.dataAfter?.[0] || currentStepData.dataBefore?.[0] || {}).map(c => ({ header: c, accessorKey: c }))} 
-                    data={currentStepData.dataAfter || currentStepData.dataBefore || []} 
-                    activeRowIndices={currentStepData.highlight?.rows}
-                  />
-                </div>
-              </div>
-            </motion.div>
-          </AnimatePresence>
-        </div>
-      </div>
-
-      {/* BOTTOM CONTROLS */}
-      <div className="h-24 border-t border-white/10 bg-zinc-900 px-8 flex items-center gap-8 rounded-b-2xl">
-        <div className="flex items-center gap-2">
-          <button onClick={reset} className="p-2 hover:bg-white/5 rounded text-zinc-400" title="Reset">
-            <RotateCcw className="w-5 h-5" />
-          </button>
-          <button onClick={prev} className="p-2 hover:bg-white/5 rounded text-zinc-400" title="Previous">
-            <SkipBack className="w-5 h-5" />
-          </button>
-          <button 
-            onClick={isPlaying ? pause : play} 
-            className="w-12 h-12 bg-blue-600 hover:bg-blue-500 rounded-full flex items-center justify-center text-white transition-colors"
-          >
-            {isPlaying ? <Pause className="w-6 h-6" /> : <Play className="w-6 h-6 ml-1" />}
-          </button>
-          <button onClick={next} className="p-2 hover:bg-white/5 rounded text-zinc-400" title="Next">
-            <SkipForward className="w-5 h-5" />
-          </button>
-        </div>
-
-        <div className="flex-1 flex flex-col gap-2">
-          <div className="flex justify-between text-[10px] font-bold text-zinc-500 uppercase tracking-widest">
-            <span>Timeline</span>
-            <span>{Math.round((currentStep / (totalSteps - 1 || 1)) * 100)}%</span>
+      <section className="rounded-[28px] border border-white/10 bg-[#07101c] p-4 shadow-[0_20px_60px_rgba(2,6,23,0.45)]">
+        <div className="mb-4 flex items-center justify-between gap-4 px-2">
+          <div>
+            <div className="text-[11px] font-semibold uppercase tracking-[0.28em] text-zinc-500">Step Controls</div>
+            <p className="mt-1 text-sm text-zinc-400">The execution story stays under the user&apos;s control.</p>
           </div>
-          <input 
-            type="range" 
-            min="0" 
-            max={totalSteps - 1} 
-            value={currentStep} 
-            onChange={(e) => goToStep(parseInt(e.target.value))}
-            className="w-full h-1.5 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-blue-500"
-          />
+
+          <div className="flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1">
+            <span className="text-xs text-zinc-500">Speed</span>
+            {([0.75, 1, 1.5] as const).map((value) => (
+              <button
+                key={value}
+                onClick={() => setSpeed(value)}
+                className={`rounded-full px-2 py-1 text-xs ${speed === value ? 'bg-sky-500/20 text-sky-200' : 'text-zinc-500'}`}
+              >
+                {value}x
+              </button>
+            ))}
+          </div>
         </div>
-      </div>
+
+        <StepControls
+          currentStep={currentStep}
+          totalSteps={totalSteps}
+          isPlaying={isPlaying}
+          onPlay={play}
+          onPause={pause}
+          onNext={next}
+          onPrev={prev}
+          onReset={reset}
+          onSeek={goToStep}
+        />
+      </section>
     </div>
   );
 }

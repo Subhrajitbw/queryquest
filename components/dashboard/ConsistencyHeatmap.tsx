@@ -1,56 +1,76 @@
 'use client';
 
+import { format, startOfWeek, subDays } from 'date-fns';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { format, subDays, startOfDay, isSameDay } from 'date-fns';
 
-interface Activity {
+interface ActivityPoint {
   date: string;
   count: number;
 }
 
-export function ConsistencyHeatmap({ data }: { data: Activity[] }) {
-  // Generate last 90 days
-  const today = startOfDay(new Date());
-  const days = Array.from({ length: 90 }, (_, i) => subDays(today, 89 - i));
+function getIntensity(count: number) {
+  if (count === 0) return 'bg-white/[0.04]';
+  if (count < 3) return 'bg-sky-950';
+  if (count < 6) return 'bg-sky-800';
+  if (count < 10) return 'bg-sky-600';
+  return 'bg-sky-400';
+}
 
-  const getColor = (count: number) => {
-    if (count === 0) return 'bg-white/5';
-    if (count < 3) return 'bg-blue-900/40';
-    if (count < 6) return 'bg-blue-700/60';
-    if (count < 10) return 'bg-blue-500/80';
-    return 'bg-blue-400';
-  };
+export function ConsistencyHeatmap({
+  data,
+  title = 'Consistency Heatmap',
+  description = 'A rolling 12-week view of student activity.',
+}: {
+  data: ActivityPoint[];
+  title?: string;
+  description?: string;
+}) {
+  const today = new Date();
+  const start = startOfWeek(subDays(today, 83), { weekStartsOn: 1 });
+  const days = Array.from({ length: 84 }, (_, index) => subDays(start, -index));
+  const activityMap = new Map(data.map((entry) => [entry.date, entry.count]));
+  const weeks = Array.from({ length: 12 }, (_, weekIndex) => days.slice(weekIndex * 7, weekIndex * 7 + 7));
 
   return (
-    <Card className="glass-card">
+    <Card className="border border-white/10 bg-white/[0.03] shadow-[0_18px_60px_rgba(15,23,42,0.35)]">
       <CardHeader>
-        <CardTitle className="text-lg font-bold text-white">Consistency (Last 90 Days)</CardTitle>
+        <CardTitle className="text-lg font-semibold text-white">{title}</CardTitle>
+        <p className="text-sm text-slate-400">{description}</p>
       </CardHeader>
-      <CardContent>
-        <div className="flex flex-wrap gap-1">
-          {days.map((day) => {
-            const dateStr = format(day, 'yyyy-MM-dd');
-            const activity = data.find((a) => a.date === dateStr);
-            const count = activity?.count || 0;
+      <CardContent className="space-y-5">
+        <div className="overflow-x-auto">
+          <div className="inline-flex gap-2">
+            {weeks.map((week, weekIndex) => (
+              <div key={weekIndex} className="grid grid-rows-7 gap-2">
+                {week.map((day) => {
+                  const key = format(day, 'yyyy-MM-dd');
+                  const count = activityMap.get(key) ?? 0;
 
-            return (
-              <div
-                key={dateStr}
-                title={`${dateStr}: ${count} actions`}
-                className={`w-3 h-3 rounded-sm ${getColor(count)} transition-colors`}
-              />
-            );
-          })}
+                  return (
+                    <div
+                      key={key}
+                      title={`${key}: ${count} actions`}
+                      className={`h-4 w-4 rounded-[6px] border border-white/5 ${getIntensity(count)}`}
+                    />
+                  );
+                })}
+              </div>
+            ))}
+          </div>
         </div>
-        <div className="mt-4 flex items-center gap-4 text-xs text-gray-500">
-          <div className="flex items-center gap-1">
-            <div className="w-3 h-3 rounded-sm bg-white/5" />
-            <span>Less</span>
+        <div className="flex items-center justify-between gap-4 text-xs text-slate-500">
+          <div className="flex items-center gap-2">
+            <span>Low</span>
+            <div className="flex items-center gap-1">
+              <span className="h-3 w-3 rounded-[4px] bg-white/[0.04]" />
+              <span className="h-3 w-3 rounded-[4px] bg-sky-950" />
+              <span className="h-3 w-3 rounded-[4px] bg-sky-800" />
+              <span className="h-3 w-3 rounded-[4px] bg-sky-600" />
+              <span className="h-3 w-3 rounded-[4px] bg-sky-400" />
+            </div>
+            <span>High</span>
           </div>
-          <div className="flex items-center gap-1">
-            <div className="w-3 h-3 rounded-sm bg-blue-400" />
-            <span>More</span>
-          </div>
+          <span>Last 12 weeks</span>
         </div>
       </CardContent>
     </Card>

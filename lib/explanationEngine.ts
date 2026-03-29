@@ -20,6 +20,14 @@ export function generateExplanation(step: any, ast: QueryAST): StepExplanation {
         tip: "If this table is large, consider adding an index."
       };
 
+    case "INDEX_SCAN":
+      return {
+        what: `Using an index on '${step.executionContext?.indexColumn || metadata.table || ast.from}' to narrow the search`,
+        why: "The database can avoid a full scan when the filter targets an indexed lookup path",
+        analogy: "Like jumping to a chapter using the index instead of reading the whole book",
+        tip: "Equality checks on id-like columns are common candidates for index access."
+      };
+
     case "JOIN": {
       const leftTable = step.visual?.leftTable || ast.from;
       const rightTable = step.visual?.rightTable || "joined table";

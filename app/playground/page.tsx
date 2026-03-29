@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect } from 'react';
 import { 
   Play, 
   Database, 
@@ -12,12 +12,12 @@ import {
   TerminalSquare,
   CheckCircle
 } from 'lucide-react';
-import { runQuery, getSchema, initDB } from '@/lib/db';
+import { getSchema } from '@/lib/db';
 import SqlEditor from '@/components/SqlEditor';
 import { motion, AnimatePresence } from 'motion/react';
 import { useAppStore } from '@/lib/store';
 import DataTable from '@/components/DataTable';
-import { parseQuery, buildExecutionSteps, ExecutionStep } from '@/lib/executionEngine';
+import { buildExecutionSteps, executeQuery, ExecutionStep } from '@/lib/executionEngine';
 import ExecutionModal from '@/components/visualizers/ExecutionModal';
 
 interface SchemaTable {
@@ -31,7 +31,7 @@ interface QueryHistory {
 }
 
 export default function PlaygroundPage() {
-  const { addBadge, setLastExecutedQuery, lastExecutedQuery } = useAppStore();
+  const { addBadge, setLastExecutedQuery, setLastExecution, lastExecutedQuery } = useAppStore();
   const [query, setQuery] = useState(lastExecutedQuery || 'SELECT * FROM customers LIMIT 5;');
   const [result, setResult] = useState<{ columns: string[], values: any[][] } | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -83,8 +83,15 @@ export default function PlaygroundPage() {
     setSteps([]);
 
     try {
-      // 1. Execute real query
-      const res = await runQuery(query);
+      const executionResult = await executeQuery(query);
+      if (!executionResult.success) {
+        throw new Error(executionResult.error || 'An error occurred while executing the query.');
+      }
+
+      const res = {
+        columns: executionResult.columns,
+        values: executionResult.rows.map((row) => executionResult.columns.map((column) => row[column])),
+      };
       setResult(res);
       saveToHistory(query);
       setLastExecutedQuery(query);
@@ -94,27 +101,10 @@ export default function PlaygroundPage() {
         addBadge('first_join');
       }
 
-      // 2. Generate visualization steps
-      const db = await initDB();
-      const ast = parseQuery(query);
-      if (ast) {
-        const generatedSteps = await buildExecutionSteps(ast, db);
-        if (generatedSteps.length > 0) {
-          setSteps(generatedSteps);
-          setIsModalOpen(true);
-        }
-      } else {
-        // Fallback for queries the educational parser doesn't support yet
-        const fallbackSteps: ExecutionStep[] = [{
-          id: 1,
-          phase: "ERROR",
-          title: "Educational Parser Limit",
-          description: "The visualizer couldn't map this specific query syntax.",
-          explanation: "While the SQL engine executed your query successfully, our educational visualizer is currently optimized for standard SELECT/JOIN/WHERE/GROUP BY patterns. We are working on expanding support for more complex SQL dialects!",
-          operation: "SYNTAX_CHECK",
-          queryFragment: query
-        }];
-        setSteps(fallbackSteps);
+      const generatedSteps = await buildExecutionSteps(query);
+      setSteps(generatedSteps);
+      setLastExecution(query, executionResult, generatedSteps);
+      if (generatedSteps.length > 0) {
         setIsModalOpen(true);
       }
     } catch (err: any) {

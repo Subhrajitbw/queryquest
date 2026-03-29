@@ -1,32 +1,60 @@
-import { Database } from 'sql.js';
 import { generateExplanation, StepExplanation } from './explanationEngine';
+import { initDB } from './db';
 
-export type Phase = "PARSE" | "VALIDATE" | "PLAN" | "ACCESS" | "EXECUTE" | "RESULT" | "ERROR";
+export type Phase = 'PARSE' | 'VALIDATE' | 'PLAN' | 'ACCESS' | 'EXECUTE' | 'RESULT' | 'ERROR';
 
 export type Operation =
-  | "TOKENIZE"
-  | "SYNTAX_CHECK"
-  | "SEMANTIC_CHECK"
-  | "PLAN_BUILD"
-  | "TABLE_SCAN"
-  | "INDEX_SCAN"
-  | "FILTER"
-  | "JOIN"
-  | "GROUP"
-  | "AGGREGATE"
-  | "SORT"
-  | "LIMIT"
-  | "PROJECT"
-  | "RETURN";
+  | 'TOKENIZE'
+  | 'SYNTAX_CHECK'
+  | 'SEMANTIC_CHECK'
+  | 'PLAN_BUILD'
+  | 'TRANSACTION'
+  | 'TABLE_SCAN'
+  | 'INDEX_SCAN'
+  | 'FILTER'
+  | 'JOIN'
+  | 'SUBQUERY'
+  | 'GROUP'
+  | 'AGGREGATE'
+  | 'SORT'
+  | 'LIMIT'
+  | 'PROJECT'
+  | 'RETURN';
+
+export interface QueryExecutionResult {
+  success: boolean;
+  rows: any[];
+  columns: string[];
+  error?: string;
+}
+
+export interface ExecutionContext {
+  accessedTables: string[];
+  accessType: 'FULL_SCAN' | 'INDEX_SCAN';
+  indexColumn?: string;
+  filterColumn?: string;
+  filterValue?: any;
+  joinKeys?: string[];
+  isTransaction: boolean;
+  indexedValues?: Array<string | number>;
+  comparisons?: string[];
+  lockTargets?: string[];
+  walEntries?: string[];
+  autoCommit?: boolean;
+  durabilityTarget?: string;
+  consistencyCheck?: string;
+}
 
 export interface ExecutionStep {
   id: number;
   phase: Phase;
   title: string;
   description: string;
+  query: string;
   explanation: string | StepExplanation;
   operation?: Operation;
   queryFragment?: string;
+  result: QueryExecutionResult;
   dataBefore?: any[];
   dataAfter?: any[];
   highlight?: {
@@ -40,14 +68,21 @@ export interface ExecutionStep {
     rowsScanned?: number;
     rowsReturned?: number;
     condition?: string;
+    columns?: string[];
+    tokens?: string[];
+    plan?: string[];
+    joins?: string[];
+    queryLength?: number;
+    tokenCount?: number;
   };
   isSubquery?: boolean;
+  executionContext?: ExecutionContext;
   visual?: {
     showTables?: string[];
     showIndexTree?: boolean;
     showDisk?: boolean;
     showMemory?: boolean;
-    animation?: "scan" | "filter" | "join" | "sort" | "group" | "none";
+    animation?: 'scan' | 'filter' | 'join' | 'sort' | 'group' | 'none';
     type?: string;
     joinType?: string;
     showVennDiagram?: boolean;
@@ -67,7 +102,7 @@ export interface QueryAST {
   joins?: {
     table: string;
     alias?: string;
-    type: "INNER" | "LEFT" | "RIGHT" | "FULL";
+    type: 'INNER' | 'LEFT' | 'RIGHT' | 'FULL';
     on: [string, string];
   }[];
   where?: WhereCondition;
@@ -86,7 +121,7 @@ export interface QueryAST {
 }
 
 export type WhereCondition = {
-  type: "AND" | "OR" | "BASIC";
+  type: 'AND' | 'OR' | 'BASIC';
   left?: WhereCondition;
   right?: WhereCondition;
   column?: string;
@@ -96,9 +131,90 @@ export type WhereCondition = {
   subquery?: QueryAST;
 };
 
+function normalizeQuery(query: string) {
+  return query.trim().replace(/;+\s*$/g, '');
+}
+
+function getStatementParts(query: string) {
+  return query
+    .split(';')
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
+function isTransactionQuery(query: string) {
+  return /\b(BEGIN|START\s+TRANSACTION|COMMIT|ROLLBACK|SAVEPOINT)\b/i.test(query);
+}
+
+function isWriteQuery(query: string) {
+  return /^\s*(INSERT|UPDATE|DELETE|UPSERT|MERGE|REPLACE)\b/i.test(query);
+}
+
+function extractAccessedTablesFromRawQuery(query: string) {
+  const matches = Array.from(
+    query.matchAll(/\b(?:FROM|JOIN|UPDATE|INTO|DELETE\s+FROM)\s+([\w\d_]+)/gi)
+  ).map((match) => match[1]);
+
+  return Array.from(new Set(matches));
+}
+
+function rowsFromExec(columns: string[], values: any[][]) {
+  return values.map((valueRow) => {
+    const row: Record<string, any> = {};
+    columns.forEach((column, index) => {
+      row[column] = valueRow[index];
+    });
+    return row;
+  });
+}
+
+export async function executeQuery(query: string): Promise<QueryExecutionResult> {
+  const normalizedQuery = normalizeQuery(query);
+  console.log('[executionEngine] executeQuery original:', query);
+  console.log('[executionEngine] executeQuery normalized:', normalizedQuery);
+
+  try {
+    const db = await initDB();
+    const result = db.exec(normalizedQuery);
+
+    if (result.length === 0) {
+      console.log('[executionEngine] executeQuery success: 0 rows');
+      return {
+        success: true,
+        rows: [],
+        columns: [],
+      };
+    }
+
+    const primaryResult = result[0];
+    const rows = rowsFromExec(primaryResult.columns, primaryResult.values as any[][]);
+
+    console.log('[executionEngine] executeQuery success:', {
+      columns: primaryResult.columns,
+      rowCount: rows.length,
+    });
+
+    return {
+      success: true,
+      rows,
+      columns: primaryResult.columns,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown SQL execution error';
+    console.error('[executionEngine] executeQuery error:', message);
+
+    return {
+      success: false,
+      rows: [],
+      columns: [],
+      error: message,
+    };
+  }
+}
+
 export function parseQuery(query: string): QueryAST | null {
-  const q = query.trim().replace(/;/g, '').replace(/\s+/g, ' ');
-  
+  const q = normalizeQuery(query).replace(/\s+/g, ' ');
+
   const getPart = (keyword: string, nextKeywords: string[]) => {
     const regex = new RegExp(`${keyword}\\s+([\\s\\S]+?)(?:\\s+(?:${nextKeywords.join('|')})|$)`, 'i');
     const match = q.match(regex);
@@ -106,62 +222,58 @@ export function parseQuery(query: string): QueryAST | null {
   };
 
   const selectPart = getPart('SELECT', ['FROM']);
-  const fromPart = getPart('FROM', ['JOIN', 'INNER JOIN', 'LEFT JOIN', 'RIGHT JOIN', 'FULL JOIN', 'WHERE', 'GROUP BY', 'ORDER BY', 'LIMIT']);
-  
+  const fromPart = getPart('FROM', ['JOIN', 'INNER JOIN', 'LEFT JOIN', 'RIGHT JOIN', 'FULL JOIN', 'WHERE', 'GROUP BY', 'HAVING', 'ORDER BY', 'LIMIT']);
+
   if (!selectPart || !fromPart) {
-    // Fallback AST for simple queries if parsing fails but it looks like a SELECT
     if (q.toLowerCase().startsWith('select')) {
       const parts = q.split(/\s+from\s+/i);
       return {
         select: [{ column: '*' }],
         from: parts[1]?.trim().split(/\s+/)[0] || 'unknown',
-        raw: query
+        raw: query,
       };
     }
     return null;
   }
 
-  const select = selectPart.split(',').map(s => {
-    const parts = s.trim().split(/\s+AS\s+/i);
+  const select = selectPart.split(',').map((segment) => {
+    const parts = segment.trim().split(/\s+AS\s+/i);
     return { column: parts[0].trim(), alias: parts[1]?.trim() };
   });
 
-  // Handle table alias in FROM
   const fromParts = fromPart.trim().split(/\s+/);
   const from = fromParts[0];
   const fromAlias = fromParts.length > 1 ? fromParts[1] : undefined;
 
-  // Joins
   const joins: QueryAST['joins'] = [];
   const joinRegex = /(?:(LEFT|RIGHT|FULL|INNER)\s+)?JOIN\s+([\w\d_]+)(?:\s+([\w\d_]+))?\s+ON\s+([\w\d_.]+\s*=\s*[\w\d_.]+)/gi;
-  let joinMatch;
+  let joinMatch: RegExpExecArray | null;
   while ((joinMatch = joinRegex.exec(q)) !== null) {
-    const onParts = joinMatch[4].split('=').map(s => s.trim());
+    const onParts = joinMatch[4].split('=').map((segment) => segment.trim());
     joins.push({
-      type: (joinMatch[1]?.toUpperCase() as any) || "INNER",
+      type: (joinMatch[1]?.toUpperCase() as any) || 'INNER',
       table: joinMatch[2],
       alias: joinMatch[3],
-      on: [onParts[0], onParts[1]]
+      on: [onParts[0], onParts[1]],
     });
   }
 
-  // Where
-  const wherePart = getPart('WHERE', ['GROUP BY', 'ORDER BY', 'LIMIT']);
+  const wherePart = getPart('WHERE', ['GROUP BY', 'HAVING', 'ORDER BY', 'LIMIT']);
   let where: WhereCondition | undefined;
   if (wherePart) {
     if (wherePart.toUpperCase().includes(' AND ')) {
       const parts = wherePart.split(/\s+AND\s+/i);
       where = {
-        type: "AND",
+        type: 'AND',
         left: parseBasicCondition(parts[0]),
-        right: parseBasicCondition(parts[1])
+        right: parseBasicCondition(parts[1]),
       };
     } else if (wherePart.toUpperCase().includes(' OR ')) {
       const parts = wherePart.split(/\s+OR\s+/i);
       where = {
-        type: "OR",
+        type: 'OR',
         left: parseBasicCondition(parts[0]),
-        right: parseBasicCondition(parts[1])
+        right: parseBasicCondition(parts[1]),
       };
     } else {
       where = parseBasicCondition(wherePart);
@@ -179,617 +291,708 @@ export function parseQuery(query: string): QueryAST | null {
     fromAlias,
     joins: joins.length > 0 ? joins : undefined,
     where,
-    groupBy: groupPart ? groupPart.split(',').map(s => s.trim()) : undefined,
+    groupBy: groupPart ? groupPart.split(',').map((segment) => segment.trim()) : undefined,
     having: havingPart ? parseHaving(havingPart) : undefined,
-    orderBy: orderPart ? orderPart.split(',').map(s => {
-      const parts = s.trim().split(/\s+/);
-      return { column: parts[0], direction: (parts[1]?.toUpperCase() as 'ASC' | 'DESC') || 'ASC' };
-    }) : undefined,
-    limit: limitPart ? parseInt(limitPart) : undefined,
-    raw: query
+    orderBy: orderPart
+      ? orderPart.split(',').map((segment) => {
+          const parts = segment.trim().split(/\s+/);
+          return {
+            column: parts[0],
+            direction: (parts[1]?.toUpperCase() as 'ASC' | 'DESC') || 'ASC',
+          };
+        })
+      : undefined,
+    limit: limitPart ? parseInt(limitPart, 10) : undefined,
+    raw: query,
   };
 }
 
-function parseBasicCondition(cond: string): WhereCondition {
-  cond = cond.trim();
-  const subqueryMatch = cond.match(/(\w+)\s+(IN|EXISTS)\s*\((.+)\)/i);
+function parseBasicCondition(condition: string): WhereCondition {
+  const trimmed = condition.trim();
+  const subqueryMatch = trimmed.match(/(\w+)\s+(IN|EXISTS)\s*\((.+)\)/i);
   if (subqueryMatch) {
     const ast = parseQuery(subqueryMatch[3]);
     return {
-      type: "BASIC",
+      type: 'BASIC',
       column: subqueryMatch[1],
       operator: subqueryMatch[2].toUpperCase(),
       isSubquery: true,
-      subquery: ast || undefined
+      subquery: ast || undefined,
     };
   }
 
-  const match = cond.match(/([\w\d_.]+)\s*(=|>|<|>=|<=|!=|LIKE|IN)\s*(.+)/i);
-  if (match) {
-    return {
-      type: "BASIC",
-      column: match[1],
-      operator: match[2].toUpperCase(),
-      value: match[3].trim().replace(/^'|'$/g, '')
-    };
+  const match = trimmed.match(/([\w\d_.]+)\s*(=|>|<|>=|<=|!=|LIKE|IN)\s*(.+)/i);
+  if (!match) {
+    return { type: 'BASIC' };
   }
-  return { type: "BASIC" };
+
+  return {
+    type: 'BASIC',
+    column: match[1],
+    operator: match[2].toUpperCase(),
+    value: match[3].trim().replace(/^'|'$/g, ''),
+  };
 }
 
-function parseHaving(cond: string) {
-  const match = cond.match(/(\w+)\s*(=|>|<|>=|<=|!=)\s*(.+)/i);
-  if (match) {
-    return {
-      column: match[1],
-      operator: match[2],
-      value: match[3].trim().replace(/^'|'$/g, '')
-    };
+function parseHaving(condition: string) {
+  const match = condition.match(/(\w+)\s*(=|>|<|>=|<=|!=)\s*(.+)/i);
+  if (!match) {
+    return undefined;
   }
-  return undefined;
+
+  return {
+    column: match[1],
+    operator: match[2],
+    value: match[3].trim().replace(/^'|'$/g, ''),
+  };
 }
 
-export async function buildExecutionSteps(ast: QueryAST, db: Database): Promise<ExecutionStep[]> {
-  const steps: ExecutionStep[] = [];
-  let stepId = 1;
-  let currentData: any[] = [];
-  const query = ast.raw;
+function stringifyWhere(condition?: WhereCondition): string {
+  if (!condition) {
+    return '';
+  }
 
-  const getValue = (row: any, col: string) => {
-    if (row[col] !== undefined) return row[col];
-    const cleanCol = col.split('.').pop();
-    const match = Object.keys(row).find(k =>
-      k === cleanCol || k.endsWith(`.${cleanCol}`)
+  if (condition.type === 'AND' || condition.type === 'OR') {
+    return `(${stringifyWhere(condition.left)} ${condition.type} ${stringifyWhere(condition.right)})`;
+  }
+
+  if (condition.isSubquery && condition.subquery) {
+    return `${condition.column} ${condition.operator} (${normalizeQuery(condition.subquery.raw)})`;
+  }
+
+  return `${condition.column} ${condition.operator} ${condition.value}`;
+}
+
+function findPrimaryFilter(condition?: WhereCondition): {
+  column?: string;
+  value?: any;
+} {
+  if (!condition) {
+    return {};
+  }
+
+  if (condition.type === 'AND' || condition.type === 'OR') {
+    const left = findPrimaryFilter(condition.left);
+    if (left.column) {
+      return left;
+    }
+
+    return findPrimaryFilter(condition.right);
+  }
+
+  return {
+    column: condition.column,
+    value: condition.value,
+  };
+}
+
+function inferAccessType(ast: QueryAST): {
+  accessType: ExecutionContext['accessType'];
+  indexColumn?: string;
+  filterColumn?: string;
+  filterValue?: any;
+} {
+  const primaryFilter = findPrimaryFilter(ast.where);
+  const filterColumn = primaryFilter.column?.split('.').pop();
+  const filterValue = primaryFilter.value;
+  const orderColumn = ast.orderBy?.[0]?.column?.split('.').pop();
+
+  const indexCandidate = filterColumn || orderColumn;
+  const looksIndexed = !!indexCandidate && /(^id$|_id$)/i.test(indexCandidate);
+
+  return {
+    accessType: looksIndexed ? 'INDEX_SCAN' : 'FULL_SCAN',
+    indexColumn: looksIndexed ? indexCandidate : undefined,
+    filterColumn,
+    filterValue,
+  };
+}
+
+async function getIndexedValues(table: string | undefined, column: string | undefined) {
+  if (!table || !column) {
+    return undefined;
+  }
+
+  const result = await executeQuery(
+    `SELECT ${column} FROM ${table} WHERE ${column} IS NOT NULL ORDER BY ${column} ASC LIMIT 12`
+  );
+
+  if (!result.success || result.rows.length === 0) {
+    return undefined;
+  }
+
+  return result.rows
+    .map((row) => row[column])
+    .filter((value) => typeof value === 'number' || typeof value === 'string') as Array<string | number>;
+}
+
+function buildComparisons(indexedValues: Array<string | number> | undefined, target: any) {
+  if (!indexedValues || indexedValues.length === 0 || target === undefined) {
+    return undefined;
+  }
+
+  const midpoint = Math.floor(indexedValues.length / 2);
+  const root = indexedValues[midpoint];
+  const branch = indexedValues[Math.floor(midpoint / 2)] ?? indexedValues[0];
+  const rightBranch = indexedValues[Math.floor((midpoint + indexedValues.length - 1) / 2)] ?? indexedValues[indexedValues.length - 1];
+
+  const comparisons: string[] = [];
+  if (target <= root) {
+    comparisons.push(`${target} <= ${root} -> move left from root`);
+    comparisons.push(
+      `${target} ${target <= branch ? '<=' : '>'} ${branch} -> descend to matching leaf range`
     );
-    return match ? row[match] : undefined;
+  } else {
+    comparisons.push(`${target} > ${root} -> move right from root`);
+    comparisons.push(
+      `${target} ${target <= rightBranch ? '<=' : '>'} ${rightBranch} -> descend to matching leaf range`
+    );
+  }
+  comparisons.push(`Leaf lookup resolves value ${target}`);
+
+  return comparisons;
+}
+
+function buildFromClause(ast: QueryAST) {
+  return `FROM ${ast.from}${ast.fromAlias ? ` ${ast.fromAlias}` : ''}`;
+}
+
+function buildJoinClauses(ast: QueryAST, joinCount?: number) {
+  const joins = ast.joins?.slice(0, joinCount ?? ast.joins.length) ?? [];
+  return joins
+    .map((join) => {
+      const joinType = join.type === 'INNER' ? 'INNER JOIN' : `${join.type} JOIN`;
+      return `${joinType} ${join.table}${join.alias ? ` ${join.alias}` : ''} ON ${join.on[0]} = ${join.on[1]}`;
+    })
+    .join(' ');
+}
+
+function buildQuery(ast: QueryAST, options?: {
+  select?: string;
+  joinCount?: number;
+  includeWhere?: boolean;
+  includeGroupBy?: boolean;
+  includeHaving?: boolean;
+  includeOrderBy?: boolean;
+  includeLimit?: boolean;
+}) {
+  const selectClause = options?.select ?? '*';
+  const whereClause = options?.includeWhere && ast.where ? ` WHERE ${stringifyWhere(ast.where)}` : '';
+  const groupByClause = options?.includeGroupBy && ast.groupBy ? ` GROUP BY ${ast.groupBy.join(', ')}` : '';
+  const havingClause = options?.includeHaving && ast.having
+    ? ` HAVING ${ast.having.column} ${ast.having.operator} ${ast.having.value}`
+    : '';
+  const orderByClause = options?.includeOrderBy && ast.orderBy
+    ? ` ORDER BY ${ast.orderBy.map((item) => `${item.column} ${item.direction}`).join(', ')}`
+    : '';
+  const limitClause = options?.includeLimit && ast.limit !== undefined ? ` LIMIT ${ast.limit}` : '';
+
+  return [
+    `SELECT ${selectClause}`,
+    buildFromClause(ast),
+    buildJoinClauses(ast, options?.joinCount),
+    whereClause,
+    groupByClause,
+    havingClause,
+    orderByClause,
+    limitClause,
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .trim();
+}
+
+async function buildJoinVisual(ast: QueryAST, joinIndex: number) {
+  const join = ast.joins?.[joinIndex];
+  if (!join) {
+    return undefined;
+  }
+
+  const leftSourceQuery =
+    joinIndex === 0
+      ? buildQuery(ast, { select: '*', joinCount: 0 })
+      : buildQuery(ast, { select: '*', joinCount: joinIndex });
+  const rightSourceQuery = `SELECT * FROM ${join.table}${join.alias ? ` ${join.alias}` : ''}`;
+
+  const [leftResult, rightResult] = await Promise.all([
+    executeQuery(leftSourceQuery),
+    executeQuery(rightSourceQuery),
+  ]);
+
+  const leftKey = join.on[0].split('.').pop() || join.on[0];
+  const rightKey = join.on[1].split('.').pop() || join.on[1];
+
+  const leftRows = leftResult.rows.slice(0, 4);
+  const rightRows = rightResult.rows.slice(0, 4);
+  const matches = leftRows.filter((leftRow) =>
+    rightRows.some((rightRow) => leftRow[leftKey] === rightRow[rightKey])
+  ).length;
+
+  return {
+    animation: 'join' as const,
+    type: 'join',
+    joinType: join.type,
+    showVennDiagram: true,
+    leftTable: ast.fromAlias || ast.from,
+    rightTable: join.alias || join.table,
+    matchingKeys: [leftKey, rightKey],
+    leftRows,
+    rightRows,
+    matches,
+  };
+}
+
+type StepDescriptor = {
+  phase: Phase;
+  title: string;
+  description: string;
+  operation: Operation;
+  query: string;
+  metadata?: ExecutionStep['metadata'];
+  visual?: ExecutionStep['visual'];
+};
+
+async function buildExecutionContext(
+  descriptor: StepDescriptor,
+  ast: QueryAST,
+  result: QueryExecutionResult
+): Promise<ExecutionContext> {
+  const normalizedQuery = normalizeQuery(descriptor.query);
+  const accessedTables = Array.from(
+    new Set([
+      ast.from,
+      ...(ast.joins?.map((join) => join.table) ?? []),
+      ...extractAccessedTablesFromRawQuery(normalizedQuery),
+    ].filter(Boolean))
+  );
+
+  const accessInference = inferAccessType(ast);
+  const joinKeys = descriptor.operation === 'JOIN'
+    ? descriptor.visual?.matchingKeys
+    : ast.joins?.flatMap((join) => join.on.map((part) => part.split('.').pop() || part));
+
+  const isTransaction = isTransactionQuery(ast.raw) || isWriteQuery(ast.raw) || isTransactionQuery(normalizedQuery);
+  const autoCommit = !isTransaction;
+  const lockTargets = descriptor.phase === 'EXECUTE' || isTransaction ? accessedTables : [];
+  const walEntries =
+    isTransaction || isWriteQuery(normalizedQuery)
+      ? [
+          `WAL append: ${descriptor.operation ?? 'STEP'} on ${accessedTables.join(', ') || 'query scope'}`,
+          result.success ? 'Flush log record before commit visibility' : 'Abort changes and preserve pre-step state',
+        ]
+      : [];
+  const consistencyCheck =
+    descriptor.operation === 'JOIN'
+      ? `Join keys ${joinKeys?.join(' = ') || 'must align'} to preserve relational consistency.`
+      : descriptor.operation === 'FILTER'
+        ? `Predicate ${descriptor.metadata?.condition || 'must remain true'} determines valid rows.`
+        : result.success
+          ? 'This step preserves valid row and column structure.'
+          : 'Execution failed before consistency could be guaranteed.';
+
+  const indexValues = await getIndexedValues(accessedTables[0], accessInference.indexColumn);
+
+  return {
+    accessedTables,
+    accessType: accessInference.accessType,
+    indexColumn: accessInference.indexColumn,
+    filterColumn: accessInference.filterColumn,
+    filterValue: accessInference.filterValue,
+    joinKeys,
+    isTransaction,
+    indexedValues: indexValues,
+    comparisons: buildComparisons(indexValues, accessInference.filterValue),
+    lockTargets,
+    walEntries,
+    autoCommit,
+    durabilityTarget: isTransaction || isWriteQuery(normalizedQuery) ? 'Write-Ahead Log and committed pages' : 'Result stream only',
+    consistencyCheck,
+  };
+}
+
+async function descriptorToStep(
+  descriptor: StepDescriptor,
+  ast: QueryAST,
+  previousRows: any[],
+  id: number
+): Promise<ExecutionStep> {
+  console.log('[executionEngine] step query:', {
+    id,
+    title: descriptor.title,
+    query: descriptor.query,
+  });
+
+  const result = await executeQuery(descriptor.query);
+  const executionContext = await buildExecutionContext(descriptor, ast, result);
+
+  console.log('[executionEngine] step result:', {
+    id,
+    title: descriptor.title,
+    success: result.success,
+    rowCount: result.rows.length,
+    columns: result.columns,
+    error: result.error,
+  });
+
+  const step: ExecutionStep = {
+    id,
+    phase: result.success ? descriptor.phase : 'ERROR',
+    title: result.success ? descriptor.title : `${descriptor.title} Failed`,
+    description: result.success ? descriptor.description : result.error || descriptor.description,
+    query: descriptor.query,
+    queryFragment: descriptor.query,
+    operation: descriptor.operation,
+    result,
+    dataBefore: previousRows,
+    dataAfter: result.rows,
+    metadata: {
+      ...descriptor.metadata,
+      rowsReturned: result.rows.length,
+      columns: result.columns,
+    },
+    executionContext,
+    visual: descriptor.visual,
+    explanation: '',
   };
 
-  const pushStep = (step: Omit<ExecutionStep, 'id'>) => {
-    const dataBefore = step.dataBefore ?? [...currentData];
-    const dataAfter = step.dataAfter !== undefined ? [...step.dataAfter] : [...currentData];
-    
-    // Auto-detect columns if not provided
-    const columns = (step as any).columns ?? 
-                   (dataAfter.length > 0 ? Object.keys(dataAfter[0]) : 
-                   (dataBefore.length > 0 ? Object.keys(dataBefore[0]) : []));
+  step.explanation = step.operation
+    ? generateExplanation(step, ast)
+    : step.description;
 
-    steps.push({ 
-      ...step, 
-      id: stepId++,
-      dataBefore,
-      dataAfter,
-      explanation: step.operation ? generateExplanation(step, ast) : step.explanation,
+  return step;
+}
+
+export async function buildExecutionSteps(input: string | QueryAST): Promise<ExecutionStep[]> {
+  const ast = typeof input === 'string' ? parseQuery(input) : input;
+
+  if (!ast && typeof input === 'string') {
+    const query = input;
+    const normalizedQuery = normalizeQuery(query);
+    const statements = getStatementParts(query);
+    const isTransactionFlow = isTransactionQuery(query) || statements.some(isWriteQuery);
+
+    if (isTransactionFlow) {
+      const transactionPlan = ['TRANSACTION', 'RETURN'];
+      const descriptors: StepDescriptor[] = [
+        {
+          phase: 'PARSE',
+          title: 'Parse Query',
+          description: 'Tokenize the SQL query and identify transaction boundaries.',
+          operation: 'TOKENIZE',
+          query: normalizedQuery,
+          metadata: {
+            tokens: normalizedQuery.split(/\s+/).filter(Boolean),
+            queryLength: normalizedQuery.length,
+            tokenCount: normalizedQuery.split(/\s+/).filter(Boolean).length,
+          },
+        },
+        {
+          phase: 'VALIDATE',
+          title: 'Validate Transaction Statements',
+          description: 'Confirm the transaction statements can execute in sequence.',
+          operation: 'SEMANTIC_CHECK',
+          query: normalizedQuery,
+          metadata: {
+            joins: extractAccessedTablesFromRawQuery(normalizedQuery),
+          },
+        },
+        {
+          phase: 'PLAN',
+          title: 'Build Transaction Plan',
+          description: 'Assemble the transactional execution path, including commit and rollback behavior.',
+          operation: 'PLAN_BUILD',
+          query: normalizedQuery,
+          metadata: {
+            plan: transactionPlan,
+          },
+        },
+        {
+          phase: 'EXECUTE',
+          title: 'Execute Transaction',
+          description: 'Run the write statements inside a transactional boundary.',
+          operation: 'TRANSACTION',
+          query: normalizedQuery,
+          metadata: {
+            table: extractAccessedTablesFromRawQuery(normalizedQuery)[0],
+          },
+        },
+        {
+          phase: 'RESULT',
+          title: 'Return Execution Result',
+          description: 'Report whether the transactional sequence completed successfully.',
+          operation: 'RETURN',
+          query: normalizedQuery,
+        },
+      ];
+
+      const transactionAst: QueryAST = {
+        select: [{ column: '*' }],
+        from: extractAccessedTablesFromRawQuery(normalizedQuery)[0] || 'unknown',
+        raw: query,
+      };
+
+      const steps: ExecutionStep[] = [];
+      let previousRows: any[] = [];
+      for (let index = 0; index < descriptors.length; index += 1) {
+        const step = await descriptorToStep(descriptors[index], transactionAst, previousRows, index + 1);
+        steps.push(step);
+        if (!step.result.success) break;
+        previousRows = step.result.rows;
+      }
+
+      return steps;
+    }
+  }
+
+  if (!ast) {
+    const query = typeof input === 'string' ? input : input.raw;
+    const result = await executeQuery(query);
+    const accessedTables = extractAccessedTablesFromRawQuery(query);
+    const transactionDetected = isTransactionQuery(query) || getStatementParts(query).some(isWriteQuery);
+    return [
+      {
+        id: 1,
+        phase: 'ERROR',
+        title: 'Unable to Build Execution Steps',
+        description: 'The step engine could not parse this SQL into executable educational steps.',
+        query,
+        queryFragment: query,
+        explanation: 'The parser could not derive a consistent execution plan from this SQL.',
+        operation: 'SYNTAX_CHECK',
+        result,
+        dataBefore: [],
+        dataAfter: result.rows,
+        metadata: {
+          columns: result.columns,
+          rowsReturned: result.rows.length,
+        },
+        executionContext: {
+          accessedTables,
+          accessType: 'FULL_SCAN',
+          isTransaction: transactionDetected,
+          lockTargets: transactionDetected ? accessedTables : [],
+          walEntries: transactionDetected
+            ? ['WAL append: transaction statements registered', result.success ? 'Commit path available' : 'Rollback path required']
+            : [],
+          autoCommit: !transactionDetected,
+          durabilityTarget: transactionDetected ? 'Write-Ahead Log and committed pages' : 'Result stream only',
+          consistencyCheck: result.success
+            ? 'Execution completed without a parsed relational plan.'
+            : 'The engine could not build a consistent plan from this SQL.',
+        },
+      },
+    ];
+  }
+
+  const normalizedOriginalQuery = normalizeQuery(ast.raw);
+  const tokens = normalizedOriginalQuery.split(/\s+/).filter(Boolean);
+  const accessInference = inferAccessType(ast);
+  const plan = [accessInference.accessType === 'INDEX_SCAN' ? 'INDEX_SCAN' : 'TABLE_SCAN'];
+  if (ast.joins?.length) plan.push('JOIN');
+  if (ast.where) plan.push('FILTER');
+  if (ast.groupBy) plan.push('GROUP', 'AGGREGATE');
+  if (ast.orderBy) plan.push('SORT');
+  if (ast.limit !== undefined) plan.push('LIMIT');
+  if (ast.select[0]?.column !== '*') plan.push('PROJECT');
+  plan.push('RETURN');
+
+  const descriptors: StepDescriptor[] = [
+    {
+      phase: 'PARSE',
+      title: 'Parse Query',
+      description: 'Tokenize the SQL query and validate its structure against the playground dialect.',
+      operation: 'TOKENIZE',
+      query: normalizedOriginalQuery,
       metadata: {
-        ...step.metadata,
-        columns: columns as string[]
-      }
-    } as any);
+        tokens,
+        queryLength: normalizedOriginalQuery.length,
+        tokenCount: tokens.length,
+      },
+    },
+    {
+      phase: 'VALIDATE',
+      title: 'Validate Query',
+      description: 'Confirm the referenced tables and columns are executable in the shared SQL engine.',
+      operation: 'SEMANTIC_CHECK',
+      query: normalizedOriginalQuery,
+      metadata: {
+        table: ast.from,
+        joins: ast.joins?.map((join) => join.table),
+      },
+    },
+    {
+      phase: 'PLAN',
+      title: 'Build Execution Plan',
+      description: 'Assemble the ordered SQL execution plan used by both playground and visualizer.',
+      operation: 'PLAN_BUILD',
+      query: normalizedOriginalQuery,
+      metadata: {
+        plan,
+      },
+    },
+    {
+      phase: 'ACCESS',
+      title: `${accessInference.accessType === 'INDEX_SCAN' ? 'Index Scan' : 'Scan'} ${ast.from}`,
+      description:
+        accessInference.accessType === 'INDEX_SCAN'
+          ? `Use the ${accessInference.indexColumn} access path on ${ast.from} before later operators run.`
+          : `Load rows from ${ast.from} as the execution starting point.`,
+      operation: accessInference.accessType === 'INDEX_SCAN' ? 'INDEX_SCAN' : 'TABLE_SCAN',
+      query: buildQuery(ast, { select: '*', joinCount: 0 }),
+      metadata: {
+        table: ast.from,
+        indexUsed: accessInference.accessType === 'INDEX_SCAN',
+        condition: ast.where ? stringifyWhere(ast.where) : undefined,
+      },
+      visual: {
+        showDisk: true,
+        showMemory: true,
+        animation: 'scan',
+        showTables: [ast.from],
+        showIndexTree: accessInference.accessType === 'INDEX_SCAN',
+      },
+    },
+  ];
 
-    currentData = dataAfter;
-  };
-
-  // 1. PARSE
-  const tokens = query.split(/\s+/).filter(t => t.length > 0);
-  pushStep({
-    phase: "PARSE",
-    title: "Query Parsing",
-    description: "Analyzing query structure and keywords.",
-    explanation: "The database engine breaks down the SQL string into individual tokens and builds an Abstract Syntax Tree (AST) to understand the query's intent.",
-    operation: "TOKENIZE",
-    queryFragment: query,
-    metadata: { 
-      tokens,
-      queryLength: query.length,
-      tokenCount: tokens.length
-    } as any,
-    dataAfter: []
-  });
-
-  // 2. VALIDATE
-  const tables = [ast.from];
-  const joins = ast.joins?.map(j => j.table) || [];
-  const columns = ast.select.map(s => s.column);
-  pushStep({
-    phase: "VALIDATE",
-    title: "Semantic Validation",
-    description: "Checking tables, columns, and permissions.",
-    explanation: "The engine verifies that all referenced tables and columns exist in the database catalog and that the user has the necessary permissions to access them.",
-    operation: "SEMANTIC_CHECK",
-    metadata: { 
-      tables, 
-      joins,
-      columns,
-      schemaChecked: true
-    } as any,
-    dataAfter: []
-  });
-
-  const getTableData = (tableName: string) => {
-    try {
-      // Handle potential aliases in table name (e.g. "customers c")
-      const realTableName = tableName.split(/\s+/)[0];
-      const res = db.exec(`SELECT * FROM ${realTableName}`);
-      if (res.length === 0) return null;
-      return { columns: res[0].columns, values: res[0].values.map(row => {
-        const obj: any = {};
-        res[0].columns.forEach((col, i) => obj[col] = row[i]);
-        return obj;
-      })};
-    } catch (e) {
-      return null;
-    }
-  };
-
-  const baseTable = getTableData(ast.from);
-  const baseTableName = ast.from.split(/\s+/)[0];
-
-  if (!baseTable) {
-    pushStep({ 
-      phase: "ERROR", 
-      title: "Table Not Found", 
-      description: `Table '${baseTableName}' not found.`, 
-      explanation: "The table does not exist in the database.", 
-      operation: "SEMANTIC_CHECK" 
-    });
-    return steps;
-  }
-
-  // 3. PLAN
-  const plan = ["SCAN"];
-  if (ast.joins) plan.push("JOIN");
-  if (ast.where) plan.push("FILTER");
-  if (ast.groupBy) plan.push("GROUP", "AGGREGATE");
-  if (ast.orderBy) plan.push("SORT");
-  plan.push("PROJECT");
-
-  pushStep({
-    phase: "PLAN",
-    title: "Query Optimization",
-    description: "Building the execution plan.",
-    explanation: "The optimizer selects the best join order and access methods.",
-    operation: "PLAN_BUILD",
-    metadata: { plan } as any,
-    dataAfter: []
-  });
-
-  // 4. ACCESS
-  pushStep({
-    phase: "ACCESS",
-    title: "Data Access",
-    description: `Scanning table ${baseTableName}.`,
-    explanation: "Loading data from disk into the buffer pool.",
-    operation: "TABLE_SCAN",
-    metadata: { 
-      table: baseTableName,
-      columns: baseTable.columns 
-    } as any,
-    dataAfter: [...baseTable.values],
-    visual: { showDisk: true, showMemory: true }
-  });
-
-  // 5. SUBQUERY EXECUTION
-  const checkSubqueries = async (cond?: WhereCondition) => {
-    if (!cond) return;
-    if (cond.isSubquery && cond.subquery) {
-      const mainDataBeforeSubquery = [...currentData];
-
-      pushStep({
-        phase: "EXECUTE",
-        title: "Executing Subquery",
-        description: "Running nested query",
-        explanation: "Subqueries are evaluated before the main query filters are applied.",
-        operation: "PLAN_BUILD",
-        dataBefore: mainDataBeforeSubquery,
-        dataAfter: mainDataBeforeSubquery,
-        visual: {
-          type: "subquery-start"
-        }
-      });
-
-      const nestedSteps = await buildExecutionSteps(cond.subquery, db);
-      const lastNestedStep = nestedSteps[nestedSteps.length - 1];
-      const subResult = lastNestedStep.dataAfter || [];
-      const subColumns = (lastNestedStep.metadata as any)?.columns || [];
-      cond.value = subResult.map(r => Object.values(r)[0]);
-
-      nestedSteps.forEach(s => {
-        s.id = stepId++;
-        s.isSubquery = true;
-        steps.push(s);
-      });
-
-      pushStep({
-        phase: "RESULT",
-        title: "Subquery Result",
-        description: "Subquery returned result set",
-        explanation: "The subquery execution is complete and the results are ready for the main query.",
-        operation: "RETURN",
-        dataBefore: [], // Hide input data for result step
-        dataAfter: subResult,
-        isSubquery: true,
-        metadata: { columns: subColumns } as any,
-        visual: {
-          type: "subquery-result",
-          result: subResult
-        } as any
-      });
-
-      // CRITICAL: Restore main query data context after subquery execution
-      currentData = mainDataBeforeSubquery;
-
-      pushStep({
-        phase: "EXECUTE",
-        title: "Subquery Connection",
-        description: `Connecting ${baseTableName} with subquery results.`,
-        explanation: `The main query will now use the results from the subquery to filter rows in ${baseTableName}.`,
-        operation: "FILTER",
-        dataBefore: mainDataBeforeSubquery,
-        dataAfter: mainDataBeforeSubquery,
-        visual: {
-          type: "subquery",
-          parentTable: baseTableName,
-          subTable: cond.subquery.from,
-          connectionColumn: cond.column,
-          resultValues: cond.value
-        } as any
-      });
-    }
-    if (cond.left) await checkSubqueries(cond.left);
-    if (cond.right) await checkSubqueries(cond.right);
-  };
-  await checkSubqueries(ast.where);
-
-  // 6. JOIN
-  if (ast.joins) {
-    for (const join of ast.joins) {
-      const joinTable = getTableData(join.table);
-      if (!joinTable) {
-        pushStep({ 
-          phase: "ERROR", 
-          title: "Join Table Not Found", 
-          description: `Table '${join.table}' not found.`, 
-          explanation: "The table referenced in the JOIN clause does not exist in the database.",
-          operation: "SEMANTIC_CHECK" 
-        });
-        return steps;
-      }
-
-      const [leftOn, rightOn] = join.on;
-      const leftCol = leftOn.includes('.') ? leftOn.split('.')[1] : leftOn;
-      const rightCol = rightOn.includes('.') ? rightOn.split('.')[1] : rightOn;
-
-      const matchingRows = [];
-      for (const leftRow of currentData) {
-        for (const rightRow of joinTable.values) {
-          if (leftRow[leftCol] === rightRow[rightCol]) {
-            matchingRows.push({ left: leftRow, right: rightRow });
-            if (matchingRows.length >= 3) break;
-          }
-        }
-        if (matchingRows.length >= 3) break;
-      }
-
-      pushStep({
-        phase: "EXECUTE",
-        title: `${join.type} JOIN`,
-        description: `Joining ${baseTableName} with ${join.table}.`,
-        explanation: "Using Nested Loop Join to combine rows based on the join condition.",
-        operation: "JOIN",
-        dataBefore: currentData,
-        dataAfter: currentData,
-        visual: { 
-          animation: "join", 
-          showTables: [baseTableName, join.table],
-          type: "join",
-          joinType: join.type,
-          showVennDiagram: true,
-          leftTable: ast.fromAlias || baseTableName,
-          rightTable: join.alias || join.table,
-          matchingKeys: [leftCol, rightCol],
-          leftRows: currentData.slice(0, 3),
-          rightRows: joinTable.values.slice(0, 3),
-          matches: matchingRows.length
-        }
-      });
-
-      const joinedData: any[] = [];
-      const leftMatched = new Set();
-      const rightMatched = new Set();
-      const leftPrefix = ast.fromAlias || baseTableName;
-      const rightPrefix = join.alias || join.table;
-
-      for (let i = 0; i < currentData.length; i++) {
-        let foundMatch = false;
-        for (let j = 0; j < joinTable.values.length; j++) {
-          const leftRow = currentData[i];
-          const rightRow = joinTable.values[j];
-          if (leftRow[leftCol] === rightRow[rightCol]) {
-            foundMatch = true;
-            leftMatched.add(i);
-            rightMatched.add(j);
-            
-            // Create a new row with prefixed keys
-            const newRow: any = {};
-            // Add left row columns
-            Object.entries(leftRow).forEach(([k, v]) => {
-              newRow[k] = v;
-              newRow[`${leftPrefix}.${k}`] = v;
-            });
-            // Add right row columns
-            Object.entries(rightRow).forEach(([k, v]) => {
-              newRow[k] = v;
-              newRow[`${rightPrefix}.${k}`] = v;
-            });
-            joinedData.push(newRow);
-          }
-        }
-        if (!foundMatch && (join.type === "LEFT" || join.type === "FULL")) {
-          const newRow: any = {};
-          Object.entries(currentData[i]).forEach(([k, v]) => {
-            newRow[k] = v;
-            newRow[`${leftPrefix}.${k}`] = v;
-          });
-          joinTable.columns.forEach(c => {
-            newRow[c] = null;
-            newRow[`${rightPrefix}.${c}`] = null;
-          });
-          joinedData.push(newRow);
-        }
-      }
-
-      if (join.type === "RIGHT" || join.type === "FULL") {
-        for (let j = 0; j < joinTable.values.length; j++) {
-          if (!rightMatched.has(j)) {
-            const newRow: any = {};
-            const firstRow = currentData[0] || {};
-            Object.keys(firstRow).forEach(c => {
-              newRow[c] = null;
-              newRow[`${leftPrefix}.${c}`] = null;
-            });
-            Object.entries(joinTable.values[j]).forEach(([k, v]) => {
-              newRow[k] = v;
-              newRow[`${rightPrefix}.${k}`] = v;
-            });
-            joinedData.push(newRow);
-          }
-        }
-      }
-
-      const joinedColumns = [...Object.keys(currentData[0] || {}), ...joinTable.columns.map(c => `${rightPrefix}.${c}`)];
-
-      pushStep({
-        phase: "EXECUTE",
-        title: "Join Result",
-        description: `Produced ${joinedData.length} rows.`,
-        explanation: "The join operation has finished merging the datasets.",
-        operation: "JOIN",
-        dataAfter: joinedData,
-        metadata: { columns: joinedColumns } as any
+  if (ast.joins?.length) {
+    for (let index = 0; index < ast.joins.length; index += 1) {
+      const join = ast.joins[index];
+      descriptors.push({
+        phase: 'EXECUTE',
+        title: `${join.type} JOIN ${join.table}`,
+        description: `Combine ${ast.from} with ${join.table} using ${join.on[0]} = ${join.on[1]}.`,
+        operation: 'JOIN',
+        query: buildQuery(ast, { select: '*', joinCount: index + 1 }),
+        metadata: {
+          table: join.table,
+          condition: `${join.on[0]} = ${join.on[1]}`,
+        },
+        visual: await buildJoinVisual(ast, index),
       });
     }
   }
 
-  // 7. WHERE
   if (ast.where) {
-    pushStep({
-      phase: "EXECUTE",
-      title: "Filtering Rows",
-      description: "Applying WHERE conditions.",
-      explanation: "Evaluating predicates for each row.",
-      operation: "FILTER",
-      dataBefore: currentData,
-      dataAfter: currentData,
-      visual: { animation: "filter" }
-    });
-
-    const evaluate = (row: any, cond: WhereCondition): boolean => {
-      if (cond.type === "AND") return evaluate(row, cond.left!) && evaluate(row, cond.right!);
-      if (cond.type === "OR") return evaluate(row, cond.left!) || evaluate(row, cond.right!);
-      
-      const val = getValue(row, cond.column!);
-      const target = cond.value;
-      
-      switch (cond.operator) {
-        case '=': return val == target;
-        case '>': return val > target;
-        case '<': return val < target;
-        case '>=': return val >= target;
-        case '<=': return val <= target;
-        case '!=': return val != target;
-        case 'LIKE': return String(val).includes(String(target).replace(/%/g, ''));
-        case 'IN': 
-          if (Array.isArray(target)) return target.includes(val);
-          return String(target).split(',').map(s => s.trim()).includes(String(val));
-        default: return true;
-      }
-    };
-
-    const filteredData = currentData.filter(row => evaluate(row, ast.where!));
-    pushStep({
-      phase: "EXECUTE",
-      title: "Filter Result",
-      description: `Kept ${filteredData.length} rows.`,
-      explanation: "Rows that did not satisfy the WHERE condition were removed.",
-      operation: "FILTER",
-      dataAfter: filteredData,
-      metadata: { columns: Object.keys(currentData[0] || {}) } as any
-    });
-  }
-
-  // 8. GROUP BY
-  let groups: Record<string, any[]> = {};
-  if (ast.groupBy) {
-    pushStep({
-      phase: "EXECUTE",
-      title: "Grouping",
-      description: `Grouping by ${ast.groupBy.join(', ')}.`,
-      explanation: "Aggregating rows into buckets.",
-      operation: "GROUP",
-      dataBefore: currentData,
-      dataAfter: currentData,
-      visual: { animation: "group" }
-    });
-
-    currentData.forEach(row => {
-      const key = ast.groupBy!.map(col => getValue(row, col)).join('|');
-      if (!groups[key]) groups[key] = [];
-      groups[key].push(row);
-    });
-  }
-
-  // 9. AGGREGATE
-  if (ast.groupBy) {
-    const aggregated: any[] = [];
-    const aggFuncs = ast.select.filter(s => /COUNT|SUM|AVG|MIN|MAX/i.test(s.column));
-
-    Object.entries(groups).forEach(([key, rows]) => {
-      const result: any = {};
-      const keyParts = key.split('|');
-      ast.groupBy!.forEach((col, i) => result[col] = keyParts[i]);
-
-      aggFuncs.forEach(agg => {
-        const match = agg.column.match(/(COUNT|SUM|AVG|MIN|MAX)\((.+)\)/i);
-        if (match) {
-          const func = match[1].toUpperCase();
-          const col = match[2].trim();
-          const vals = rows.map(r => Number(getValue(r, col))).filter(v => !isNaN(v));
-          
-          let val = 0;
-          if (func === 'COUNT') val = rows.length;
-          else if (func === 'SUM') val = vals.reduce((a, b) => a + b, 0);
-          else if (func === 'AVG') val = vals.reduce((a, b) => a + b, 0) / vals.length;
-          else if (func === 'MIN') val = Math.min(...vals);
-          else if (func === 'MAX') val = Math.max(...vals);
-          
-          result[agg.alias || agg.column] = val;
-        }
+    if (ast.where.isSubquery && ast.where.subquery) {
+      descriptors.push({
+        phase: 'EXECUTE',
+        title: 'Execute Subquery',
+        description: 'Resolve the nested query before applying the outer filter.',
+        operation: 'SUBQUERY',
+        query: normalizeQuery(ast.where.subquery.raw),
+        metadata: {
+          condition: stringifyWhere(ast.where),
+        },
+        visual: {
+          animation: 'filter',
+          type: 'subquery',
+        },
       });
-      aggregated.push(result);
-    });
+    }
 
-    pushStep({
-      phase: "EXECUTE",
-      title: "Aggregation",
-      description: "Computing summary values.",
-      explanation: "For each group, the engine calculates summary values like COUNT, SUM, or AVG.",
-      operation: "AGGREGATE",
-      dataAfter: aggregated,
-      metadata: { columns: Object.keys(aggregated[0] || {}) } as any
+    descriptors.push({
+      phase: 'EXECUTE',
+      title: 'Apply Filters',
+      description: 'Filter the joined dataset using the WHERE clause.',
+      operation: 'FILTER',
+      query: buildQuery(ast, { select: '*', joinCount: ast.joins?.length ?? 0, includeWhere: true }),
+      metadata: {
+        condition: stringifyWhere(ast.where),
+      },
+      visual: {
+        animation: 'filter',
+      },
     });
   }
 
-  // 10. HAVING
-  if (ast.having) {
-    const { column, operator, value } = ast.having;
-    const filteredData = currentData.filter(row => {
-      const val = getValue(row, column);
-      switch (operator) {
-        case '=': return val == value;
-        case '>': return val > value;
-        case '<': return val < value;
-        case '>=': return val >= value;
-        case '<=': return val <= value;
-        case '!=': return val != value;
-        default: return true;
-      }
-    });
-    pushStep({
-      phase: "EXECUTE",
-      title: "Having Filter",
-      description: `Applying HAVING ${column} ${operator} ${value}`,
-      explanation: "The HAVING clause filters groups based on aggregate values.",
-      operation: "FILTER",
-      dataAfter: filteredData,
-      metadata: { columns: Object.keys(currentData[0] || {}) } as any
+  if (ast.groupBy) {
+    descriptors.push({
+      phase: 'EXECUTE',
+      title: 'Group Rows',
+      description: `Group result rows by ${ast.groupBy.join(', ')}.`,
+      operation: 'GROUP',
+      query: buildQuery(ast, {
+        select: ast.select.map((segment) => segment.alias ? `${segment.column} AS ${segment.alias}` : segment.column).join(', '),
+        joinCount: ast.joins?.length ?? 0,
+        includeWhere: !!ast.where,
+        includeGroupBy: true,
+      }),
+      visual: {
+        animation: 'group',
+      },
     });
   }
 
-  // 11. SORT
   if (ast.orderBy) {
-    pushStep({
-      phase: "EXECUTE",
-      title: "Sorting",
-      description: "Ordering result set.",
-      explanation: "The database engine reorders the rows based on the specified columns in the ORDER BY clause.",
-      operation: "SORT",
-      dataBefore: currentData,
-      dataAfter: currentData,
-      visual: { animation: "sort" }
-    });
-
-    const sortedData = [...currentData].sort((a, b) => {
-      for (const order of ast.orderBy!) {
-        const valA = getValue(a, order.column);
-        const valB = getValue(b, order.column);
-        if (valA < valB) return order.direction === 'ASC' ? -1 : 1;
-        if (valA > valB) return order.direction === 'ASC' ? 1 : -1;
-      }
-      return 0;
-    });
-
-    pushStep({
-      phase: "EXECUTE",
-      title: "Sort Complete",
-      description: "Data reordered.",
-      explanation: "The sort operation has finished organizing the rows.",
-      operation: "SORT",
-      dataAfter: sortedData,
-      metadata: { columns: Object.keys(currentData[0] || {}) } as any
+    descriptors.push({
+      phase: 'EXECUTE',
+      title: 'Sort Rows',
+      description: 'Order the result set using the ORDER BY clause.',
+      operation: 'SORT',
+      query: buildQuery(ast, {
+        select: ast.groupBy
+          ? ast.select.map((segment) => segment.alias ? `${segment.column} AS ${segment.alias}` : segment.column).join(', ')
+          : '*',
+        joinCount: ast.joins?.length ?? 0,
+        includeWhere: !!ast.where,
+        includeGroupBy: !!ast.groupBy,
+        includeHaving: !!ast.having,
+        includeOrderBy: true,
+      }),
+      visual: {
+        animation: 'sort',
+      },
     });
   }
 
-  // 12. LIMIT
   if (ast.limit !== undefined) {
-    const limitedData = currentData.slice(0, ast.limit);
-    pushStep({
-      phase: "EXECUTE",
-      title: "Limit",
-      description: `Returning top ${ast.limit} rows.`,
-      explanation: "The engine stops processing after the specified number of rows have been collected.",
-      operation: "LIMIT",
-      dataAfter: limitedData,
-      metadata: { columns: Object.keys(currentData[0] || {}) } as any
+    descriptors.push({
+      phase: 'EXECUTE',
+      title: 'Apply Limit',
+      description: `Restrict the result to the first ${ast.limit} rows.`,
+      operation: 'LIMIT',
+      query: buildQuery(ast, {
+        select: ast.groupBy
+          ? ast.select.map((segment) => segment.alias ? `${segment.column} AS ${segment.alias}` : segment.column).join(', ')
+          : '*',
+        joinCount: ast.joins?.length ?? 0,
+        includeWhere: !!ast.where,
+        includeGroupBy: !!ast.groupBy,
+        includeHaving: !!ast.having,
+        includeOrderBy: !!ast.orderBy,
+        includeLimit: true,
+      }),
     });
   }
 
-  // 13. PROJECTION
-  if (ast.select[0].column !== '*') {
-    const projectedColumns = ast.select.map(s => s.alias || s.column);
-    const projectedData = currentData.map(row => {
-      const newRow: any = {};
-      ast.select.forEach(s => {
-        const key = s.alias || s.column;
-        const val = getValue(row, s.column);
-        newRow[key] = val !== undefined ? val : null;
-      });
-      return newRow;
-    });
-    pushStep({
-      phase: "EXECUTE",
-      title: "Projection",
-      description: "Selecting final columns.",
-      explanation: "The engine discards any columns that were not requested in the SELECT clause.",
-      operation: "PROJECT",
-      dataAfter: projectedData,
-      metadata: { columns: projectedColumns } as any
-    });
-  }
-
-  // 14. RESULT
-  const finalColumns = (steps[steps.length - 1].metadata as any)?.columns || 
-                      (currentData.length > 0 ? Object.keys(currentData[0]) : baseTable.columns);
-
-  pushStep({
-    phase: "RESULT",
-    title: "Final Result",
-    description: "Query execution completed.",
-    explanation: "The query has been successfully executed, and the final result set is returned to the user.",
-    operation: "RETURN",
-    dataAfter: [...currentData],
-    metadata: { 
-      rowsReturned: currentData.length,
-      columns: finalColumns
-    } as any
+  descriptors.push({
+    phase: 'RESULT',
+    title: 'Return Final Result',
+    description: 'Return the same result set shown in the SQL playground.',
+    operation: 'RETURN',
+    query: normalizedOriginalQuery,
   });
+
+  const dedupedDescriptors = descriptors.filter(
+    (descriptor, index, list) =>
+      index === 0 ||
+      descriptor.query !== list[index - 1].query ||
+      descriptor.title !== list[index - 1].title
+  );
+
+  const steps: ExecutionStep[] = [];
+  let previousRows: any[] = [];
+
+  for (let index = 0; index < dedupedDescriptors.length; index += 1) {
+    const step = await descriptorToStep(dedupedDescriptors[index], ast, previousRows, index + 1);
+    steps.push(step);
+
+    if (!step.result.success) {
+      break;
+    }
+
+    previousRows = step.result.rows;
+  }
 
   return steps;
 }

@@ -3,13 +3,22 @@
 import { useState } from 'react';
 import { generateLearningPath, LearningPath, Chapter } from '@/lib/aiEngine';
 import { useAppStore } from '@/lib/store';
-import { Sparkles, ArrowLeft, Loader2, BrainCircuit, Map as MapIcon, BookOpen } from 'lucide-react';
+import {
+  Sparkles,
+  ArrowLeft,
+  Loader2,
+  BrainCircuit,
+  Map as MapIcon,
+  BookOpen,
+  GraduationCap,
+  Compass,
+  LogOut,
+} from 'lucide-react';
 import AiLessonView from '@/components/AiLessonView';
 import SkillTree from '@/components/SkillTree';
 import { motion, AnimatePresence } from 'motion/react';
 import confetti from 'canvas-confetti';
 import { useRouter } from 'next/navigation';
-import { LogOut } from 'lucide-react';
 
 export default function LearningHubPage() {
   const [view, setView] = useState<'map' | 'lesson'>('map');
@@ -51,8 +60,8 @@ export default function LearningHubPage() {
         setSelectedChapter(null);
       }
     } catch (err) {
-      console.error("Failed to generate learning path:", err);
-      setError("An unexpected error occurred. Please try again.");
+      console.error('Failed to generate learning path:', err);
+      setError('An unexpected error occurred. Please try again.');
       setSelectedChapter(null);
     } finally {
       setIsLoading(false);
@@ -61,16 +70,15 @@ export default function LearningHubPage() {
 
   const handleLessonComplete = () => {
     if (!completedLessons.includes(currentLessonIndex)) {
-      setCompletedLessons(prev => [...prev, currentLessonIndex]);
+      setCompletedLessons((prev) => [...prev, currentLessonIndex]);
       addXP(50);
     }
   };
 
   const handleNext = () => {
     if (learningPath && currentLessonIndex < learningPath.lessons.length - 1) {
-      setCurrentLessonIndex(prev => prev + 1);
+      setCurrentLessonIndex((prev) => prev + 1);
     } else {
-      // Path completed
       if (selectedChapter) {
         completeChapter(selectedChapter.id);
         addXP(selectedChapter.xp);
@@ -79,7 +87,7 @@ export default function LearningHubPage() {
       confetti({
         particleCount: 150,
         spread: 100,
-        origin: { y: 0.6 }
+        origin: { y: 0.6 },
       });
       setView('map');
       setLearningPath(null);
@@ -89,177 +97,245 @@ export default function LearningHubPage() {
 
   const handlePrev = () => {
     if (currentLessonIndex > 0) {
-      setCurrentLessonIndex(prev => prev - 1);
+      setCurrentLessonIndex((prev) => prev - 1);
     }
   };
 
   return (
     <div className="min-h-screen bg-[#050505] text-white">
-      <div className="max-w-6xl mx-auto py-12 px-4">
-        <div className="flex justify-end mb-4">
-          <button 
+      <div className="mx-auto max-w-7xl px-4 py-10 md:px-6">
+        <div className="mb-6 flex justify-end">
+          <button
             onClick={handleLogout}
             disabled={loggingOut}
-            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-white/5 border border-white/10 text-gray-400 hover:text-red-400 hover:bg-red-500/10 transition-all text-xs font-black uppercase tracking-widest"
+            className="flex items-center gap-2 rounded-2xl border border-white/10 bg-white/5 px-4 py-2 text-xs font-black uppercase tracking-widest text-gray-400 transition-all hover:bg-red-500/10 hover:text-red-300"
           >
             {loggingOut ? <Loader2 className="h-4 w-4 animate-spin" /> : <LogOut className="h-4 w-4" />}
             Logout
           </button>
         </div>
+
         <AnimatePresence mode="wait">
           {view === 'map' && !isLoading ? (
-            <motion.div 
+            <motion.div
               key="map-view"
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              className="flex flex-col gap-16"
+              className="flex flex-col gap-12"
             >
-              {/* Hero Section */}
-              <div className="relative py-20 px-8 rounded-[3rem] overflow-hidden bg-gradient-to-br from-blue-600/20 via-transparent to-purple-600/20 border border-white/10">
-                <div className="absolute inset-0 bg-[url('https://picsum.photos/seed/database/1920/1080')] opacity-5 mix-blend-overlay grayscale" />
-                <div className="relative z-10 flex flex-col items-center text-center max-w-4xl mx-auto">
-                  <motion.div 
-                    initial={{ scale: 0.9, opacity: 0 }}
-                    animate={{ scale: 1, opacity: 1 }}
-                    className="mb-8 p-4 rounded-3xl bg-blue-500/10 border border-blue-500/20"
-                  >
-                    <BrainCircuit className="h-16 w-16 text-blue-500" />
-                  </motion.div>
-                  <h1 className="text-6xl md:text-8xl font-black tracking-tighter mb-6 leading-none">
-                    MASTER THE <br />
-                    <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-purple-500">DATABASE</span>
-                  </h1>
-                  <p className="text-gray-400 text-xl md:text-2xl max-w-2xl leading-relaxed mb-10">
-                    Your personal AI-powered journey from SQL basics to advanced DBMS architecture. 
-                    Pick a chapter below to start your interactive lesson.
-                  </p>
-                  
-                  <div className="flex flex-wrap justify-center gap-6">
-                    <div className="flex items-center gap-3 bg-white/5 px-6 py-3 rounded-2xl border border-white/10">
-                      <MapIcon className="h-5 w-5 text-blue-400" />
-                      <span className="text-sm font-black uppercase tracking-widest text-gray-300">
-                        {completedChapters.length} / 25 Chapters
-                      </span>
+              <section className="overflow-hidden rounded-[2.5rem] border border-white/10 bg-[radial-gradient(circle_at_top_left,rgba(59,130,246,0.2),transparent_25%),radial-gradient(circle_at_bottom_right,rgba(16,185,129,0.15),transparent_28%),linear-gradient(135deg,#07101d,#040608)] p-8 md:p-12">
+                <div className="grid gap-8 xl:grid-cols-[1.1fr_0.9fr] xl:items-end">
+                  <div>
+                    <div className="inline-flex items-center gap-2 rounded-full border border-blue-500/20 bg-blue-500/10 px-4 py-2 text-[11px] font-black uppercase tracking-[0.28em] text-blue-300">
+                      <BrainCircuit className="h-4 w-4" />
+                      AI Learning Hub
                     </div>
-                    <div className="flex items-center gap-3 bg-white/5 px-6 py-3 rounded-2xl border border-white/10">
-                      <Sparkles className="h-5 w-5 text-yellow-500" />
-                      <span className="text-sm font-black uppercase tracking-widest text-gray-300">
-                        AI-Powered Path
-                      </span>
+                    <h1 className="mt-6 text-5xl font-black tracking-tight text-white md:text-7xl">
+                      Learn SQL like you are building a real system.
+                    </h1>
+                    <p className="mt-6 max-w-3xl text-base leading-8 text-zinc-300 md:text-lg">
+                      QueryQuest now treats the learning hub like a guided lab, not a chapter list.
+                      Each chapter opens into a structured lesson path with theory, mental models,
+                      runnable examples, and practice prompts tuned to your schema.
+                    </p>
+                  </div>
+
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <div className="rounded-[2rem] border border-white/10 bg-white/[0.04] p-5">
+                      <div className="flex items-center gap-2 text-[11px] font-black uppercase tracking-[0.22em] text-zinc-500">
+                        <MapIcon className="h-4 w-4 text-blue-300" />
+                        Progress
+                      </div>
+                      <div className="mt-3 text-3xl font-black text-white">{completedChapters.length}</div>
+                      <p className="mt-1 text-sm leading-6 text-zinc-400">chapters completed across your curriculum</p>
+                    </div>
+                    <div className="rounded-[2rem] border border-white/10 bg-white/[0.04] p-5">
+                      <div className="flex items-center gap-2 text-[11px] font-black uppercase tracking-[0.22em] text-zinc-500">
+                        <Sparkles className="h-4 w-4 text-amber-300" />
+                        Lesson Mode
+                      </div>
+                      <div className="mt-3 text-3xl font-black text-white">AI</div>
+                      <p className="mt-1 text-sm leading-6 text-zinc-400">examples, hints, and learning objectives tuned per chapter</p>
+                    </div>
+                    <div className="rounded-[2rem] border border-white/10 bg-white/[0.04] p-5">
+                      <div className="flex items-center gap-2 text-[11px] font-black uppercase tracking-[0.22em] text-zinc-500">
+                        <Compass className="h-4 w-4 text-emerald-300" />
+                        Focus
+                      </div>
+                      <div className="mt-3 text-3xl font-black text-white">Stepwise</div>
+                      <p className="mt-1 text-sm leading-6 text-zinc-400">start with intuition, then syntax, then challenge</p>
+                    </div>
+                    <div className="rounded-[2rem] border border-white/10 bg-white/[0.04] p-5">
+                      <div className="flex items-center gap-2 text-[11px] font-black uppercase tracking-[0.22em] text-zinc-500">
+                        <GraduationCap className="h-4 w-4 text-fuchsia-300" />
+                        Outcome
+                      </div>
+                      <div className="mt-3 text-3xl font-black text-white">Applied</div>
+                      <p className="mt-1 text-sm leading-6 text-zinc-400">every path ends in a runnable SQL task, not just reading</p>
                     </div>
                   </div>
                 </div>
-              </div>
+              </section>
 
-              {/* Skill Tree Section */}
-              <div className="flex flex-col gap-8">
-                <div className="flex items-center justify-between px-4">
-                  <h2 className="text-2xl font-black tracking-tight uppercase">Your Learning Path</h2>
-                  <div className="h-px flex-1 mx-8 bg-white/10" />
-                  <div className="text-xs font-bold text-gray-500 uppercase tracking-widest">Scroll to explore</div>
+              <section className="grid gap-6 lg:grid-cols-[1.2fr_0.8fr]">
+                <div className="rounded-[2rem] border border-white/10 bg-white/[0.03] p-6">
+                  <div className="text-[11px] font-black uppercase tracking-[0.28em] text-zinc-500">
+                    How This Hub Works
+                  </div>
+                  <div className="mt-5 grid gap-4 md:grid-cols-3">
+                    {[
+                      {
+                        title: 'Pick a chapter',
+                        body: 'Choose the next unlocked concept in the path, from SQL basics through DBMS internals.',
+                      },
+                      {
+                        title: 'Study the lesson path',
+                        body: 'Each chapter opens into a multi-lesson sequence with objectives, examples, and expert framing.',
+                      },
+                      {
+                        title: 'Practice on real schema',
+                        body: 'You write SQL against the actual sandbox database so every lesson stays grounded.',
+                      },
+                    ].map((item) => (
+                      <div key={item.title} className="rounded-2xl border border-white/10 bg-[#07101b] p-4">
+                        <div className="text-sm font-bold text-white">{item.title}</div>
+                        <p className="mt-2 text-sm leading-7 text-zinc-400">{item.body}</p>
+                      </div>
+                    ))}
+                  </div>
                 </div>
-                
+
+                <div className="rounded-[2rem] border border-white/10 bg-white/[0.03] p-6">
+                  <div className="text-[11px] font-black uppercase tracking-[0.28em] text-zinc-500">
+                    Sandbox Schema
+                  </div>
+                  <div className="mt-5 space-y-3">
+                    {[
+                      ['Users', 'identity, signup, account ownership'],
+                      ['Products', 'catalog, pricing, categorization'],
+                      ['Orders', 'purchase events, status, totals'],
+                      ['Order_Items', 'line items and per-order detail'],
+                      ['Categories', 'taxonomy and product grouping'],
+                    ].map(([name, description]) => (
+                      <div key={name} className="rounded-2xl border border-white/10 bg-[#07101b] p-4">
+                        <div className="flex items-center gap-2 text-sm font-bold text-white">
+                          <BookOpen className="h-4 w-4 text-blue-300" />
+                          {name}
+                        </div>
+                        <p className="mt-2 text-sm leading-6 text-zinc-400">{description}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </section>
+
+              <section className="space-y-6">
+                <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+                  <div>
+                    <div className="text-[11px] font-black uppercase tracking-[0.28em] text-zinc-500">
+                      Curriculum Map
+                    </div>
+                    <h2 className="mt-2 text-3xl font-black tracking-tight text-white">
+                      Choose your next chapter
+                    </h2>
+                    <p className="mt-2 max-w-2xl text-sm leading-7 text-zinc-400">
+                      The path is ordered deliberately so the harder material makes sense when you reach it.
+                    </p>
+                  </div>
+                </div>
+
                 {error && (
-                  <div className="p-6 bg-red-500/10 border border-red-500/20 rounded-3xl text-red-400 text-center text-sm font-bold animate-pulse">
+                  <div className="rounded-[2rem] border border-rose-500/20 bg-rose-500/10 p-5 text-sm font-bold text-rose-300">
                     {error}
                   </div>
                 )}
 
                 <SkillTree onChapterClick={handleChapterClick} />
-              </div>
-
-              {/* Schema Preview Section */}
-              <div className="mt-16 p-12 rounded-[3rem] bg-white/5 border border-white/10">
-                <div className="flex flex-col md:flex-row gap-12 items-start">
-                  <div className="max-w-xs">
-                    <h3 className="text-3xl font-black tracking-tight mb-4 uppercase">The Sandbox Database</h3>
-                    <p className="text-gray-400 text-sm leading-relaxed">
-                      All lessons and challenges run against this real-world schema. 
-                      Familiarize yourself with the tables to write better queries.
-                    </p>
-                  </div>
-                  <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                    {['Users', 'Products', 'Orders', 'Order_Items', 'Categories'].map((table) => (
-                      <div key={table} className="p-4 rounded-2xl bg-white/5 border border-white/10 hover:border-blue-500/30 transition-colors group">
-                        <div className="flex items-center gap-3 mb-2">
-                          <div className="h-2 w-2 rounded-full bg-blue-500" />
-                          <span className="text-sm font-bold text-gray-300 group-hover:text-blue-400 transition-colors">{table}</span>
-                        </div>
-                        <div className="text-[10px] text-gray-500 font-mono">
-                          {table === 'Users' ? 'id, name, email, created_at' :
-                           table === 'Products' ? 'id, name, price, category_id' :
-                           table === 'Orders' ? 'id, user_id, total, status' :
-                           table === 'Order_Items' ? 'id, order_id, product_id, qty' :
-                           'id, name, description'}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
+              </section>
             </motion.div>
           ) : isLoading ? (
-            <motion.div 
+            <motion.div
               key="loading"
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              className="flex flex-col items-center justify-center py-32 gap-6"
+              className="flex flex-col items-center justify-center gap-6 py-32"
             >
               <div className="relative">
-                <Loader2 className="h-16 w-16 text-blue-500 animate-spin" />
-                <Sparkles className="h-6 w-6 text-yellow-500 absolute -top-2 -right-2 animate-bounce" />
+                <Loader2 className="h-16 w-16 animate-spin text-blue-500" />
+                <Sparkles className="absolute -right-2 -top-2 h-6 w-6 animate-bounce text-amber-400" />
               </div>
               <div className="text-center">
-                <h2 className="text-2xl font-bold mb-2">Generating interactive lessons...</h2>
-                <p className="text-gray-500">AI is crafting a personalized path for &quot;{selectedChapter?.title}&quot;</p>
+                <h2 className="text-2xl font-bold text-white">Designing your lesson path...</h2>
+                <p className="mt-2 text-zinc-500">
+                  Building a more detailed chapter flow for &quot;{selectedChapter?.title}&quot;
+                </p>
               </div>
             </motion.div>
           ) : view === 'lesson' && learningPath ? (
-            <motion.div 
+            <motion.div
               key="lesson-view"
-              initial={{ opacity: 0, scale: 0.95 }}
+              initial={{ opacity: 0, scale: 0.98 }}
               animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 1.05 }}
+              exit={{ opacity: 0, scale: 1.02 }}
+              className="space-y-6"
             >
-              <div className="flex items-center justify-between mb-8">
-                <button 
-                  onClick={() => {
-                    setView('map');
-                    setLearningPath(null);
-                    setSelectedChapter(null);
-                  }}
-                  className="flex items-center gap-2 text-gray-400 hover:text-white transition-colors"
-                >
-                  <ArrowLeft className="h-4 w-4" /> Back to Map
-                </button>
-                <div className="flex items-center gap-4">
-                  <div className="flex gap-1">
-                    {learningPath.lessons.map((_, i) => (
-                      <div 
-                        key={i} 
-                        className={`h-1.5 w-8 rounded-full transition-all duration-500 ${
-                          i === currentLessonIndex ? 'bg-blue-500 w-12' : 
-                          completedLessons.includes(i) ? 'bg-green-500' : 'bg-white/10'
+              <div className="flex flex-col gap-4 rounded-[2rem] border border-white/10 bg-white/[0.03] p-6">
+                <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                  <button
+                    onClick={() => {
+                      setView('map');
+                      setLearningPath(null);
+                      setSelectedChapter(null);
+                    }}
+                    className="flex items-center gap-2 text-sm font-bold text-zinc-400 transition-colors hover:text-white"
+                  >
+                    <ArrowLeft className="h-4 w-4" />
+                    Back to curriculum map
+                  </button>
+
+                  <div className="flex flex-wrap items-center gap-3">
+                    <span className="rounded-full border border-blue-500/20 bg-blue-500/10 px-3 py-1 text-[10px] font-black uppercase tracking-[0.22em] text-blue-300">
+                      Chapter
+                    </span>
+                    <div className="text-sm text-zinc-300">{selectedChapter?.title}</div>
+                  </div>
+                </div>
+
+                <div className="grid gap-5 lg:grid-cols-[1fr_auto] lg:items-end">
+                  <div>
+                    <h2 className="text-3xl font-black tracking-tight text-white">{learningPath.title}</h2>
+                    <p className="mt-2 max-w-3xl text-sm leading-7 text-zinc-400">
+                      {learningPath.description}
+                    </p>
+                  </div>
+                  <div className="text-sm text-zinc-400">
+                    Lesson {currentLessonIndex + 1} of {learningPath.lessons.length}
+                  </div>
+                </div>
+
+                <div className="flex gap-2">
+                  {learningPath.lessons.map((lesson, index) => (
+                    <div key={`${lesson.title}-${index}`} className="flex-1">
+                      <div
+                        className={`mb-2 h-2 rounded-full transition-all ${
+                          index === currentLessonIndex
+                            ? 'bg-blue-500'
+                            : completedLessons.includes(index)
+                              ? 'bg-emerald-500'
+                              : 'bg-white/10'
                         }`}
                       />
-                    ))}
-                  </div>
-                  <span className="text-xs font-bold text-gray-500 uppercase tracking-widest">
-                    Lesson {currentLessonIndex + 1} of {learningPath.lessons.length}
-                  </span>
+                      <div className="text-[10px] uppercase tracking-[0.2em] text-zinc-500 line-clamp-1">
+                        {lesson.title}
+                      </div>
+                    </div>
+                  ))}
                 </div>
               </div>
 
-              <div className="mb-8">
-                <h2 className="text-sm font-bold text-blue-500 uppercase tracking-[0.2em] mb-1">
-                  Chapter: {selectedChapter?.title}
-                </h2>
-                <p className="text-gray-500 text-xs">{selectedChapter?.description}</p>
-              </div>
-
-              <AiLessonView 
+              <AiLessonView
                 lesson={learningPath.lessons[currentLessonIndex]}
                 onComplete={handleLessonComplete}
                 onNext={handleNext}

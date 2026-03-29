@@ -164,17 +164,15 @@ export async function getSchema() {
 }
 
 export async function runQuery(query: string) {
-  const database = await initDB();
-  try {
-    const result = database.exec(query);
-    if (result.length === 0) {
-      return { columns: [], values: [] };
-    }
-    return {
-      columns: result[0].columns,
-      values: result[0].values
-    };
-  } catch (error) {
-    throw error;
+  const { executeQuery } = await import('./executionEngine');
+  const result = await executeQuery(query);
+
+  if (!result.success) {
+    throw new Error(result.error || 'SQL execution failed');
   }
+
+  return {
+    columns: result.columns,
+    values: result.rows.map((row) => result.columns.map((column) => row[column])),
+  };
 }

@@ -4,9 +4,14 @@ import { startOfDay, subDays } from 'date-fns';
 import { TOTAL_LESSONS } from '@/lib/constants';
 import { TeacherSidebar } from '@/components/dashboard/TeacherSidebar';
 import { OverviewCards } from '@/components/dashboard/OverviewCards';
-import { ActivityBarChart, ProgressLineChart } from '@/components/dashboard/Charts';
+import { ActivityFeed } from '@/components/dashboard/ActivityFeed';
+import {
+  ActivityLineChart,
+  ProgressLineChart,
+  TopicMasteryBarChart,
+} from '@/components/dashboard/Charts';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { ArrowRight, TrendingUp } from 'lucide-react';
+import { ArrowRight, BookOpen, Sparkles, TrendingUp, Users } from 'lucide-react';
 
 async function getOverviewData() {
   const today = startOfDay(new Date());
@@ -35,6 +40,9 @@ async function getOverviewData() {
       },
       orderBy: {
         createdAt: 'asc',
+      },
+      include: {
+        user: true,
       },
     }),
   ]);
@@ -86,16 +94,67 @@ async function getOverviewData() {
     take: 4,
   });
 
+  const topicMasteryMap = new Map<string, { total: number; count: number }>();
+  for (const student of students) {
+    for (const entry of student.progress) {
+      const current = topicMasteryMap.get(entry.topic) ?? { total: 0, count: 0 };
+      current.total += entry.score;
+      current.count += 1;
+      topicMasteryMap.set(entry.topic, current);
+    }
+  }
+  const topicMastery = Array.from(topicMasteryMap.entries())
+    .map(([topic, value]) => ({
+      topic,
+      score: value.total / value.count,
+    }))
+    .sort((left, right) => right.score - left.score)
+    .slice(0, 6);
+
+  const recentActivity = completedProgress.slice(0, 5).map((entry) => ({
+    id: entry.id,
+    title: `${entry.user.name} lesson progress updated`,
+    description: `${entry.topic} now contributes to completion analytics at ${entry.score}% mastery.`,
+    timestamp: entry.createdAt.toLocaleDateString(),
+    tone: 'insight' as const,
+  }));
+
   return {
-    overview: {
-      totalStudents,
-      activeToday,
-      avgScore,
-      avgCompletion,
-    },
+    overview: [
+      {
+        title: 'Total Students',
+        value: totalStudents,
+        description: 'Active students represented in analytics.',
+        icon: Users,
+        accentClassName: 'text-sky-300',
+      },
+      {
+        title: 'Active Today',
+        value: activeToday,
+        description: 'Learners who generated activity today.',
+        icon: TrendingUp,
+        accentClassName: 'text-emerald-300',
+      },
+      {
+        title: 'Avg. Score',
+        value: `${avgScore.toFixed(1)}%`,
+        description: 'Overall average score across tracked progress.',
+        icon: Sparkles,
+        accentClassName: 'text-violet-300',
+      },
+      {
+        title: 'Avg. Completion',
+        value: `${avgCompletion.toFixed(1)}%`,
+        description: 'Curriculum completion rate across students.',
+        icon: BookOpen,
+        accentClassName: 'text-amber-300',
+      },
+    ],
     dailyActivity,
     completionByDate,
     classSnapshots,
+    topicMastery,
+    recentActivity,
   };
 }
 
@@ -103,62 +162,86 @@ export default async function DashboardOverviewPage() {
   const data = await getOverviewData();
 
   return (
-    <div className="flex h-screen bg-[#050505] text-white">
+    <div className="flex h-screen bg-[#020617] text-white">
       <TeacherSidebar />
-      <main className="flex-1 overflow-y-auto p-6">
-        <div className="mx-auto max-w-7xl space-y-8">
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <div className="text-xs font-black uppercase tracking-[0.35em] text-blue-400">
-                Teacher Workspace
+      <main className="flex-1 overflow-y-auto">
+        <div className="mx-auto max-w-7xl space-y-8 p-6">
+          <section className="rounded-[28px] border border-white/10 bg-[linear-gradient(135deg,#0f172a,#030712)] p-8 shadow-[0_30px_80px_rgba(2,6,23,0.6)]">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <div className="text-xs font-semibold uppercase tracking-[0.32em] text-sky-300">
+                  Analytics
+                </div>
+                <h1 className="mt-4 text-4xl font-semibold tracking-tight text-white">
+                  System-level performance signals for teachers
+                </h1>
+                <p className="mt-3 max-w-2xl text-base leading-7 text-slate-300">
+                  Use this overview to track engagement, spot concept gaps, and quickly navigate to
+                  the students or classes that need attention.
+                </p>
               </div>
-              <h1 className="mt-3 text-4xl font-black uppercase tracking-tighter text-white">
-                Analytics Overview
-              </h1>
-              <p className="mt-2 max-w-2xl text-sm text-slate-400">
-                Track activity, completion, and recent class health from one place.
-              </p>
+              <Link
+                href="/dashboard/students"
+                className="inline-flex items-center gap-2 rounded-2xl border border-sky-500/20 bg-sky-500/10 px-4 py-3 text-sm font-medium text-sky-200 transition-all hover:bg-sky-500/15"
+              >
+                Review Students <ArrowRight className="h-4 w-4" />
+              </Link>
             </div>
-            <Link
-              href="/dashboard/students"
-              className="inline-flex items-center gap-2 rounded-xl border border-blue-500/20 bg-blue-500/10 px-4 py-3 text-sm font-bold text-blue-300 transition-all hover:bg-blue-500/15"
-            >
-              Review Students <ArrowRight className="h-4 w-4" />
-            </Link>
+          </section>
+
+          <OverviewCards items={data.overview} />
+
+          <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
+            <ActivityLineChart
+              data={data.dailyActivity}
+              title="Activity Over Time"
+              description="A rolling view of student activity across recent days."
+            />
+            <ProgressLineChart
+              data={data.completionByDate}
+              title="Completion Velocity"
+              description="How quickly completed lesson progress is accumulating."
+            />
+            <TopicMasteryBarChart
+              data={data.topicMastery}
+              title="Topic Mastery"
+              description="Which concepts are strongest across the current cohort."
+            />
+            <ActivityFeed
+              items={data.recentActivity}
+              title="Analytics Notes"
+              description="Recent inputs shaping the numbers on this page."
+            />
           </div>
 
-          <OverviewCards {...data.overview} />
-
-          <div className="grid grid-cols-1 gap-8 lg:grid-cols-2">
-            <ActivityBarChart data={data.dailyActivity} />
-            <ProgressLineChart data={data.completionByDate} />
-          </div>
-
-          <Card className="glass-card border border-white/10">
+          <Card className="border border-white/10 bg-white/[0.03] shadow-[0_18px_60px_rgba(15,23,42,0.35)]">
             <CardHeader>
-              <CardTitle className="flex items-center gap-2 text-xl font-bold text-white">
-                <TrendingUp className="h-5 w-5 text-green-400" />
+              <CardTitle className="flex items-center gap-2 text-lg font-semibold text-white">
+                <TrendingUp className="h-5 w-5 text-sky-300" />
                 Recent Classes
               </CardTitle>
+              <p className="text-sm text-slate-400">
+                Jump into specific class dashboards from the latest active groups.
+              </p>
             </CardHeader>
             <CardContent className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
               {data.classSnapshots.map((item) => (
                 <Link
                   key={item.id}
                   href={`/dashboard/class/${item.id}`}
-                  className="rounded-2xl border border-white/10 bg-white/5 p-4 transition-all hover:border-blue-500/40 hover:bg-white/10"
+                  className="rounded-3xl border border-white/10 bg-[#0b1220] p-5 transition-all hover:border-sky-500/30 hover:bg-[#0e1728]"
                 >
-                  <div className="text-xs font-bold uppercase tracking-[0.2em] text-slate-500">
+                  <div className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
                     Class
                   </div>
-                  <div className="mt-3 text-lg font-bold text-white">{item.name}</div>
+                  <div className="mt-3 text-lg font-medium text-white">{item.name}</div>
                   <div className="mt-2 text-sm text-slate-400">
                     {item._count.students} enrolled students
                   </div>
                 </Link>
               ))}
               {data.classSnapshots.length === 0 && (
-                <div className="rounded-2xl border border-white/10 bg-white/5 p-6 text-sm text-slate-400">
+                <div className="rounded-3xl border border-white/10 bg-[#0b1220] p-6 text-sm text-slate-400">
                   No class analytics available yet.
                 </div>
               )}

@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import type { ExecutionStep, QueryExecutionResult } from '@/lib/executionEngine';
 
 interface AppState {
   xp: number;
@@ -10,12 +11,15 @@ interface AppState {
   badges: string[];
   showLevelUpModal: boolean;
   lastExecutedQuery: string | null;
+  lastExecutionResult: QueryExecutionResult | null;
+  lastExecutionSteps: ExecutionStep[];
   addXP: (amount: number) => void;
   completeChapter: (chapterId: string) => void;
   addBadge: (badge: string) => void;
   checkStreak: () => void;
   closeLevelUpModal: () => void;
   setLastExecutedQuery: (query: string) => void;
+  setLastExecution: (query: string, result: QueryExecutionResult, steps: ExecutionStep[]) => void;
 }
 
 const XP_PER_LEVEL = 1000;
@@ -31,6 +35,8 @@ export const useAppStore = create<AppState>()(
       badges: [],
       showLevelUpModal: false,
       lastExecutedQuery: null,
+      lastExecutionResult: null,
+      lastExecutionSteps: [],
       addXP: (amount) =>
         set((state) => {
           const newXp = state.xp + amount;
@@ -76,6 +82,12 @@ export const useAppStore = create<AppState>()(
       }),
       closeLevelUpModal: () => set({ showLevelUpModal: false }),
       setLastExecutedQuery: (query) => set({ lastExecutedQuery: query }),
+      setLastExecution: (query, result, steps) =>
+        set({
+          lastExecutedQuery: query,
+          lastExecutionResult: result,
+          lastExecutionSteps: steps,
+        }),
     }),
     {
       name: 'queryquest-storage',

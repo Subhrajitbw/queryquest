@@ -1,157 +1,69 @@
 'use client';
 
-import { useMemo, useState, useEffect } from 'react';
-import { motion } from 'motion/react';
+import { useMemo } from 'react';
+import { GitBranch } from 'lucide-react';
 import { useAppStore } from '@/lib/store';
-import { parseQuery } from '@/lib/executionEngine';
-import { runQuery } from '@/lib/db';
-import { Database, Layers, Link2 } from 'lucide-react';
+import type { ExecutionStep } from '@/lib/executionEngine';
+import type { VisualizerProps } from '@/components/visualizers/shared';
 
-const DUMMY_A = [
-  { id: 1, name: 'Alice' },
-  { id: 2, name: 'Bob' },
-  { id: 3, name: 'Charlie' }
-];
+function resolveStep(provided?: ExecutionStep) {
+  return provided;
+}
 
-const DUMMY_B = [
-  { order_id: 101, user_id: 1, item: 'Laptop' },
-  { order_id: 102, user_id: 2, item: 'Mouse' },
-  { order_id: 103, user_id: 1, item: 'Keyboard' }
-];
+export default function JoinVisualizer(props: VisualizerProps = {}) {
+  const { lastExecutionSteps } = useAppStore();
+  const step = useMemo(
+    () =>
+      resolveStep(props.step) ??
+      [...lastExecutionSteps].reverse().find((entry) => entry.visual?.type === 'join'),
+    [lastExecutionSteps, props.step]
+  );
 
-export default function JoinVisualizer() {
-  const { lastExecutedQuery } = useAppStore();
-  const [data, setData] = useState<{ tableA: any[], tableB: any[], nameA: string, nameB: string, joinKeyA: string, joinKeyB: string } | null>(null);
-
-  useEffect(() => {
-    async function loadData() {
-      if (!lastExecutedQuery) {
-        setData({ tableA: DUMMY_A, tableB: DUMMY_B, nameA: 'Users', nameB: 'Orders', joinKeyA: 'id', joinKeyB: 'user_id' });
-        return;
-      }
-
-      const ast = parseQuery(lastExecutedQuery);
-      if (ast && ast.joins && ast.joins.length > 0) {
-        const tableA = await runQuery(`SELECT * FROM ${ast.from}`);
-        const tableB = await runQuery(`SELECT * FROM ${ast.joins[0].table}`);
-
-        if (tableA && tableB) {
-          setData({
-            tableA: tableA.values.slice(0, 5),
-            tableB: tableB.values.slice(0, 5),
-            nameA: ast.from,
-            nameB: ast.joins[0].table,
-            joinKeyA: ast.joins[0].on[0],
-            joinKeyB: ast.joins[0].on[1]
-          });
-          return;
-        }
-      }
-      
-      setData({ tableA: DUMMY_A, tableB: DUMMY_B, nameA: 'Users', nameB: 'Orders', joinKeyA: 'id', joinKeyB: 'user_id' });
-    }
-    loadData();
-  }, [lastExecutedQuery]);
-
-  const visual = useMemo(() => {
-    if (!data) return null;
-    return {
-      leftTable: data.nameA,
-      rightTable: data.nameB,
-      joinType: 'INNER',
-      matchingKeys: [data.joinKeyA, data.joinKeyB],
-      leftRows: data.tableA,
-      rightRows: data.tableB,
-      matches: data.tableA.filter(a => data.tableB.some(b => a[data.joinKeyA] === b[data.joinKeyB])).length
-    };
-  }, [data]);
-
-  if (!data || !visual) {
+  if (!step?.visual || step.visual.type !== 'join') {
     return (
-      <div className="flex flex-col items-center justify-center py-20">
-        <div className="h-12 w-12 border-4 border-blue-500/20 border-t-blue-500 rounded-full animate-spin mb-4" />
-        <p className="text-gray-400">Loading visualization...</p>
+      <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-6 text-sm text-zinc-400">
+        No join step is active for the current context.
       </div>
     );
   }
 
   return (
-    <div className="flex flex-col items-center gap-12 py-12 bg-zinc-900/30 rounded-3xl border border-white/5 w-full max-w-4xl mx-auto">
-      <div className="flex items-center justify-center gap-12 relative h-48">
-        {/* Left Circle */}
-        <motion.div 
-          initial={{ x: -20, opacity: 0 }}
-          animate={{ x: 0, opacity: 1 }}
-          className="w-48 h-48 rounded-full border-4 border-blue-500/50 bg-blue-500/10 flex items-center justify-center relative z-10"
-        >
-          <div className="text-center">
-            <div className="text-[10px] font-bold text-blue-400 uppercase tracking-widest mb-1">Left Table</div>
-            <div className="text-lg font-bold text-white">{visual.leftTable}</div>
-          </div>
-        </motion.div>
-
-        {/* Right Circle */}
-        <motion.div 
-          initial={{ x: 20, opacity: 0 }}
-          animate={{ x: 0, opacity: 1 }}
-          className="w-48 h-48 rounded-full border-4 border-purple-500/50 bg-purple-500/10 flex items-center justify-center -ml-16 relative z-0"
-        >
-          <div className="text-center pl-8">
-            <div className="text-[10px] font-bold text-purple-400 uppercase tracking-widest mb-1">Right Table</div>
-            <div className="text-lg font-bold text-white">{visual.rightTable}</div>
-          </div>
-        </motion.div>
-
-        {/* Intersection Highlight */}
-        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-           <div className="w-16 h-32 bg-yellow-500/20 blur-xl rounded-full flex items-center justify-center">
-             {visual.matches !== undefined && visual.matches > 0 && (
-               <div className="text-[10px] font-bold text-yellow-500 bg-zinc-950/80 px-2 py-1 rounded-full border border-yellow-500/20 whitespace-nowrap">
-                 {visual.matches} Matches Found
-               </div>
-             )}
-           </div>
+    <div className="grid gap-4 xl:grid-cols-[1fr_auto_1fr]">
+      <div className="rounded-2xl border border-sky-500/20 bg-sky-500/5 p-4">
+        <div className="text-xs font-semibold uppercase tracking-[0.24em] text-sky-300">Left Side</div>
+        <div className="mt-2 text-lg font-semibold text-white">{step.visual.leftTable}</div>
+        <div className="mt-4 space-y-2">
+          {(step.visual.leftRows ?? []).map((row, index) => (
+            <div
+              key={`left-${index}`}
+              className="rounded-xl border border-sky-500/20 bg-[#08101f] p-3 font-mono text-xs text-sky-100"
+            >
+              {JSON.stringify(row)}
+            </div>
+          ))}
         </div>
       </div>
 
-      {/* Row Matching Visualization */}
-      <div className="w-full px-12 grid grid-cols-3 gap-8 items-center">
-        <div className="space-y-2">
-          {visual.leftRows?.map((row: any, i: number) => (
-            <motion.div 
-              key={`left-${i}`}
-              initial={{ x: -20, opacity: 0 }}
-              animate={{ x: 0, opacity: 1 }}
-              transition={{ delay: i * 0.1 }}
-              className="p-2 bg-blue-500/5 border border-blue-500/20 rounded text-[10px] font-mono text-blue-300 truncate"
+      <div className="flex flex-col items-center justify-center gap-3 rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-6">
+        <GitBranch className="h-5 w-5 text-amber-300" />
+        <div className="rounded-full border border-amber-500/20 bg-amber-500/10 px-3 py-1 font-mono text-xs text-amber-200">
+          {step.visual.matchingKeys?.join(' = ')}
+        </div>
+        <div className="text-xs text-zinc-500">{step.visual.joinType} JOIN</div>
+        <div className="text-xs text-zinc-400">{step.visual.matches ?? 0} matches</div>
+      </div>
+
+      <div className="rounded-2xl border border-violet-500/20 bg-violet-500/5 p-4">
+        <div className="text-xs font-semibold uppercase tracking-[0.24em] text-violet-300">Right Side</div>
+        <div className="mt-2 text-lg font-semibold text-white">{step.visual.rightTable}</div>
+        <div className="mt-4 space-y-2">
+          {(step.visual.rightRows ?? []).map((row, index) => (
+            <div
+              key={`right-${index}`}
+              className="rounded-xl border border-violet-500/20 bg-[#12081b] p-3 font-mono text-xs text-violet-100"
             >
               {JSON.stringify(row)}
-            </motion.div>
-          ))}
-        </div>
-
-        <div className="flex flex-col items-center gap-2">
-          <div className="h-px w-full bg-gradient-to-r from-blue-500/50 via-yellow-500/50 to-purple-500/50" />
-          <div className="px-3 py-1 bg-zinc-800 rounded-full border border-white/10 text-[10px] font-mono text-yellow-400">
-            {visual.matchingKeys?.join(' = ')}
-          </div>
-          <div className="h-px w-full bg-gradient-to-r from-blue-500/50 via-yellow-500/50 to-purple-500/50" />
-          <div className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest mt-2">
-            {visual.joinType} JOIN
-          </div>
-        </div>
-
-        <div className="space-y-2">
-          {visual.rightRows?.map((row: any, i: number) => (
-            <motion.div 
-              key={`right-${i}`}
-              initial={{ x: 20, opacity: 0 }}
-              animate={{ x: 0, opacity: 1 }}
-              transition={{ delay: i * 0.1 }}
-              className="p-2 bg-purple-500/5 border border-purple-500/20 rounded text-[10px] font-mono text-purple-300 truncate text-right"
-            >
-              {JSON.stringify(row)}
-            </motion.div>
+            </div>
           ))}
         </div>
       </div>
