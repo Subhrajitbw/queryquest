@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { ChevronRight, Flame } from 'lucide-react';
-import { DataTable } from '@/components/dashboard/DataTable';
+import { DataTable, DataTableFilter } from '@/components/dashboard/DataTable';
 
 export interface StudentRow {
   id: string;
@@ -21,6 +21,19 @@ export function StudentsTable({
   rows: StudentRow[];
   classOptions: string[];
 }) {
+  const filters: DataTableFilter<StudentRow>[] = [
+    {
+      key: 'class',
+      label: 'Classes',
+      allLabel: 'All classes',
+      options: classOptions.map((className) => ({
+        label: className,
+        value: className,
+        matches: (row) => row.className === className,
+      })),
+    },
+  ];
+
   return (
     <DataTable
       title="Student Directory"
@@ -30,18 +43,7 @@ export function StudentsTable({
       getRowHref={(row) => `/dashboard/student/${row.id}`}
       searchKeys={[(row) => row.name, (row) => row.email, (row) => row.className]}
       searchPlaceholder="Search students by name, email, or class"
-      filters={[
-        {
-          key: 'class',
-          label: 'Classes',
-          allLabel: 'All classes',
-          options: classOptions.map((className) => ({
-            label: className,
-            value: className,
-            matches: (row) => row.className === className,
-          })),
-        },
-      ]}
+      filters={filters}
       columns={[
         {
           key: 'student',
