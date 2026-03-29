@@ -1,0 +1,62 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mongodb"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  student
+  teacher
+}
+
+model User {
+  id        String     @id @default(auto()) @map("_id") @db.ObjectId
+  name      String
+  email     String     @unique
+  password  String?    // Added for authentication
+  role      Role       @default(student)
+  classId   String?    @db.ObjectId
+  class     Class?     @relation(fields: [classId], references: [id])
+  createdAt DateTime   @default(now())
+  progress  Progress[]
+  activity  Activity[]
+}
+
+model Class {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  name      String
+  teacherId String   @db.ObjectId
+  students  User[]
+  createdAt DateTime @default(now())
+}
+
+model Progress {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  userId    String   @db.ObjectId
+  user      User     @relation(fields: [userId], references: [id])
+  topic     String
+  lessonId  String
+  score     Int      // 0-100
+  completed Boolean
+  timeSpent Int      // seconds
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([topic])
+}
+
+model Activity {
+  id           String   @id @default(auto()) @map("_id") @db.ObjectId
+  userId       String   @db.ObjectId
+  user         User     @relation(fields: [userId], references: [id])
+  date         DateTime @default(now())
+  actionsCount Int      @default(0)
+
+  @@index([userId, date])
+}
