@@ -9,7 +9,7 @@ export async function initDB(): Promise<Database> {
 
   initPromise = (async () => {
     const SQL = await initSqlJs({
-      locateFile: file => `/api/sql-wasm`
+      locateFile: file => 'https://cdn.jsdelivr.net/npm/sql.js/dist/sql-wasm.wasm'
     });
     
     db = new SQL.Database();
